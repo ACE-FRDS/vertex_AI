@@ -1,0 +1,15 @@
+[package]
+name = "vertex-ai-audit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+thiserror.workspace = true
+vertex-ai-types = { path = "../vertex-ai-types" }
+
+[dev-dependencies]
+chrono.workspace = true
+uuid.workspace = true

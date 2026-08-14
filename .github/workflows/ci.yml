@@ -1,0 +1,52 @@
+name: Rust CI
+
+on:
+  push:
+    paths:
+      - "ProgramSource/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "ProgramSource/**"
+      - ".github/workflows/ci.yml"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: ProgramSource
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  postgres-memory:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: vertex
+          POSTGRES_PASSWORD: vertex-test
+          POSTGRES_DB: vertex_ai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vertex -d vertex_ai_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      VERTEX_AI_TEST_DATABASE_URL: postgres://vertex:vertex-test@localhost:5432/vertex_ai_test
+    defaults:
+      run:
+        working-directory: ProgramSource
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p vertex-ai-memory postgres_migration_and_crud_when_test_database_is_configured -- --ignored

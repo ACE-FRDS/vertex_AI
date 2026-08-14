@@ -1,0 +1,17 @@
+[package]
+name = "vertex-ai-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+keyring.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+vertex-ai-types = { path = "../vertex-ai-types" }
+zeroize.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true

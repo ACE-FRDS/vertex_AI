@@ -1,0 +1,38 @@
+[package]
+name = "vertex-ai-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "vertex_ai_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+vertex-ai-audit = { path = "../../../crates/vertex-ai-audit" }
+vertex-ai-context = { path = "../../../crates/vertex-ai-context" }
+vertex-ai-core = { path = "../../../crates/vertex-ai-core" }
+vertex-ai-developer = { path = "../../../crates/vertex-ai-developer" }
+vertex-ai-environment = { path = "../../../crates/vertex-ai-environment" }
+vertex-ai-memory = { path = "../../../crates/vertex-ai-memory" }
+vertex-ai-provider = { path = "../../../crates/vertex-ai-provider" }
+vertex-ai-provider-ollama = { path = "../../../crates/vertex-ai-provider-ollama" }
+vertex-ai-runtime = { path = "../../../crates/vertex-ai-runtime" }
+vertex-ai-runtime-postgres = { path = "../../../crates/vertex-ai-runtime-postgres" }
+vertex-ai-secrets = { path = "../../../crates/vertex-ai-secrets" }
+vertex-ai-types = { path = "../../../crates/vertex-ai-types" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

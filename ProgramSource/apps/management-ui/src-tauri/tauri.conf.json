@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vertex AI",
+  "version": "0.1.3",
+  "identifier": "com.vertexproject.ai",
+  "build": {
+    "beforeDevCommand": "pnpm dev -- --port 4173 --strictPort",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://127.0.0.1:4173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Vertex AI 管理コンソール",
+        "width": 1440,
+        "height": 920,
+        "minWidth": 1040,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "runtime/postgresql/18.4/pgsql": "runtime/postgresql/18.4/pgsql"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh",
+        "compression": "lzma"
+      }
+    }
+  }
+}
