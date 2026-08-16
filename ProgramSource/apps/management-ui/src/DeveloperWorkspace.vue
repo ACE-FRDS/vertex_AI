@@ -38,13 +38,8 @@ onMounted(async () => {
       language: determineLanguage(currentFileName.value),
       automaticLayout: true,
       theme: 'vs-dark',
-      minimap: { enabled: false },
-      tabSize: 2,
-      insertSpaces: true,
+      minimap: { enabled: false }
     })
-
-    // Ensure editor options
-    editorInstance.updateOptions({ tabSize: 2, insertSpaces: true, formatOnPaste: true })
 
     editorInstance.onDidChangeModelContent(() => {
       const val = editorInstance?.getValue() ?? ''
@@ -52,34 +47,6 @@ onMounted(async () => {
       dirty.value = true
       message.value = null
     })
-
-    // Add Ctrl/Cmd+S keybinding to format & save
-    try {
-      const saveKey = monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS
-      editorInstance.addCommand(saveKey, () => {
-        // run format document if available, then save
-        const formatAction = editorInstance?.getAction('editor.action.formatDocument')
-        if (formatAction) {
-          // run returns a monaco.Promise-like, handle if present
-          try {
-            // @ts-ignore
-            const res = formatAction.run()
-            if (res && typeof res.then === 'function') {
-              res.then(() => saveFile()).catch(() => saveFile())
-            } else {
-              saveFile()
-            }
-          } catch (e) {
-            saveFile()
-          }
-        } else {
-          saveFile()
-        }
-      })
-    } catch (e) {
-      // ignore keybinding add failure
-      console.warn('Failed to add save keybinding', e)
-    }
   }
 })
 
@@ -105,11 +72,10 @@ watch(() => editorContent.value, (v) => {
 
 function determineLanguage(fileName: string | null) {
   if (!fileName) return 'typescript'
-  const available = monaco.languages.getLanguages().map(l => l.id)
   if (fileName.endsWith('.ts') || fileName.endsWith('.tsx')) return 'typescript'
   if (fileName.endsWith('.js') || fileName.endsWith('.jsx')) return 'javascript'
   if (fileName.endsWith('.rs')) return 'rust'
-  if (fileName.endsWith('.vue')) return available.includes('vue') ? 'vue' : 'html'
+  if (fileName.endsWith('.vue')) return 'html'
   if (fileName.endsWith('.css')) return 'css'
   return 'plaintext'
 }
