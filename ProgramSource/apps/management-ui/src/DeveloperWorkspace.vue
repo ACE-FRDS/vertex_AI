@@ -17,6 +17,10 @@ const message = ref<string | null>(null)
 let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null
 let modelMap: Record<string, monaco.editor.ITextModel> = {}
 const editorContainer = ref<HTMLElement | null>(null)
+// meta per-file for SFCs
+let metaMap: Record<string, { scriptLang?: string }> = {}
+const currentSubModel = ref<'template'|'script'|'style'|null>(null)
+const activeVueFile = ref<string | null>(null)
 
 function close() {
   emit('close')
@@ -95,14 +99,38 @@ async function openEntry(line: string) {
       // update monaco model
       if (editorInstance) {
         const lang = determineLanguage(name)
-        let model = modelMap[name]
-        if (!model) {
-          model = monaco.editor.createModel(content, lang)
-          modelMap[name] = model
+        if (name.endsWith('.vue')) {
+          const parts = parseVueSFC(content)
+          const tplKey = `${name}::template`
+          const scriptKey = `${name}::script`
+          const styleKey = `${name}::style`
+
+          let tplModel = modelMap[tplKey]
+          if (!tplModel) { tplModel = monaco.editor.createModel(parts.template || '', 'html'); modelMap[tplKey] = tplModel } else { tplModel.setValue(parts.template || '') }
+
+          const scriptLang = parts.scriptLang === 'ts' ? 'typescript' : 'javascript'
+          let scriptModel = modelMap[scriptKey]
+          if (!scriptModel) { scriptModel = monaco.editor.createModel(parts.script || '', scriptLang); modelMap[scriptKey] = scriptModel } else { scriptModel.setValue(parts.script || '') }
+
+          let styleModel = modelMap[styleKey]
+          if (!styleModel) { styleModel = monaco.editor.createModel(parts.style || '', 'css'); modelMap[styleKey] = styleModel } else { styleModel.setValue(parts.style || '') }
+
+          metaMap[name] = { scriptLang: parts.scriptLang }
+          activeVueFile.value = name
+          currentSubModel.value = 'template'
+          editorInstance.setModel(tplModel)
+          // sync editorContent
+          editorContent.value = tplModel.getValue()
         } else {
-          model.setValue(content)
+          let model = modelMap[name]
+          if (!model) {
+            model = monaco.editor.createModel(content, lang)
+            modelMap[name] = model
+          } else {
+            model.setValue(content)
+          }
+          editorInstance.setModel(model)
         }
-        editorInstance.setModel(model)
       }
     } catch (e) {
       editorContent.value = `Error: ${String(e)}`
@@ -114,12 +142,41 @@ async function openEntry(line: string) {
 
 function onEditorInput() { dirty.value = true; message.value = null }
 
+function parseVueSFC(content: string) {
+  const templateMatch = content.match(/<template[^>]*>([\s\S]*?)<\/template>/i)
+  const scriptMatch = content.match(/<script(?:\s+lang=["']?(ts|js)["']?)?[^>]*>([\s\S]*?)<\/script>/i)
+  const styleMatch = content.match(/<style[^>]*>([\s\S]*?)<\/style>/i)
+  return {
+    template: templateMatch ? templateMatch[1].trim() : '',
+    script: scriptMatch ? scriptMatch[2].trim() : '',
+    scriptLang: scriptMatch ? (scriptMatch[1] ? scriptMatch[1] : 'js') : 'js',
+    style: styleMatch ? styleMatch[1].trim() : ''
+  }
+}
+
+function buildVueSFC(name: string) {
+  const tpl = modelMap[`${name}::template`]?.getValue() ?? ''
+  const script = modelMap[`${name}::script`]?.getValue() ?? ''
+  const style = modelMap[`${name}::style`]?.getValue() ?? ''
+  const scriptModel = modelMap[`${name}::script`]
+  const scriptLangAttr = (scriptModel && (scriptModel.getLanguageId ? scriptModel.getLanguageId().includes('typescript') : false)) ? ' lang="ts"' : ''
+  let res = ''
+  res += `<template>\n${tpl}\n` + '</' + `template>\n\n`
+  res += `<script${scriptLangAttr}>\n${script}\n` + '</' + `script>\n\n`
+  if (style.trim()) res += `<style>\n${style}\n` + '</' + `style>\n`
+  return res
+}
+
 async function saveFile() {
   if (!props.workspaceId || !currentFileName.value) return
   saving.value = true
   message.value = null
   try {
-    const ok = await writeWorkspaceFile(props.workspaceId, currentFileName.value, editorContent.value)
+    let contentToWrite = editorContent.value
+    if (currentFileName.value.endsWith('.vue') && activeVueFile.value === currentFileName.value) {
+      contentToWrite = buildVueSFC(currentFileName.value)
+    }
+    const ok = await writeWorkspaceFile(props.workspaceId, currentFileName.value, contentToWrite)
     if (ok) {
       dirty.value = false
       message.value = 'Saved'
@@ -130,6 +187,18 @@ async function saveFile() {
     message.value = `Error: ${String(e)}`
   } finally {
     saving.value = false
+  }
+}
+
+function switchVueSubModel(kind: 'template'|'script'|'style') {
+  if (!activeVueFile.value || !editorInstance) return
+  const name = activeVueFile.value
+  const key = `${name}::${kind}`
+  const model = modelMap[key]
+  if (model) {
+    editorInstance.setModel(model)
+    currentSubModel.value = kind
+    editorContent.value = model.getValue()
   }
 }
 </script>
@@ -159,6 +228,11 @@ async function saveFile() {
           <div class="editor-tabs">
             <span>{{ currentFileName ?? 'untitled' }}</span>
             <div style="margin-left:auto; display:flex; gap:8px; align-items:center">
+              <template v-if="currentFileName && currentFileName.endsWith('.vue')">
+                <button class="button tertiary" :class="{ active: currentSubModel === 'template' }" @click.prevent="switchVueSubModel('template')">Template</button>
+                <button class="button tertiary" :class="{ active: currentSubModel === 'script' }" @click.prevent="switchVueSubModel('script')">Script</button>
+                <button class="button tertiary" :class="{ active: currentSubModel === 'style' }" @click.prevent="switchVueSubModel('style')">Style</button>
+              </template>
               <button class="button tertiary" @click="saveFile" :disabled="!currentFileName || !dirty || saving">{{ saving ? 'Saving...' : 'Save' }}</button>
               <span v-if="message" class="muted">{{ message }}</span>
             </div>

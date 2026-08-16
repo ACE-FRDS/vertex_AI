@@ -78,6 +78,7 @@ import {
   type DeveloperTask,
   type DeveloperWorkspace,
 } from './services/developer'
+// @ts-ignore - Vue SFC import
 import DeveloperWorkspaceView from './DeveloperWorkspace.vue'
 import {
   cancelArdSession,
