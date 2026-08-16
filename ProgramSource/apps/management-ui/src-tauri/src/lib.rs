@@ -162,6 +162,7 @@ fn read_workspace_file(
     workspace_id: WorkspaceId,
     relative: String,
 ) -> Result<String, ErrorEnvelope> {
+    tracing::info!("tauri: read_workspace_file invoked: workspace={:?}, relative={}", workspace_id, relative);
     state
         .developer
         .read_workspace_file(workspace_id, &relative)
@@ -176,6 +177,7 @@ fn write_workspace_file(
     relative: String,
     content: String,
 ) -> Result<bool, ErrorEnvelope> {
+    tracing::info!("tauri: write_workspace_file invoked: workspace={:?}, relative={} (content length {})", workspace_id, relative, content.len());
     state
         .developer
         .write_workspace_file(workspace_id, &relative, &content)
