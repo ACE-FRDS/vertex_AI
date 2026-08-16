@@ -78,6 +78,7 @@ import {
   type DeveloperTask,
   type DeveloperWorkspace,
 } from './services/developer'
+import DeveloperWorkspaceView from './DeveloperWorkspace.vue'
 import {
   cancelArdSession,
   createArdTeam,
@@ -316,6 +317,7 @@ const developerRequest = ref('現在のRuntime Managerの構造を調査し、�
 const developerTask = ref<DeveloperTask | null>(null)
 const developerBusy = ref(false)
 const developerError = ref('')
+const workspaceOpen = ref(false)
 const ardTeams = ref<ArdTeam[]>([])
 const ardWorkflows = ref<ArdWorkflow[]>([])
 const selectedArdTeam = ref('')
@@ -1296,10 +1298,13 @@ function connectProvider() {
                   <span><ShieldCheck :size="15" />{{ locale === 'ja' ? 'Workspace外書込み・Secret読込・危険コマンドを拒否' : 'Workspace escape, secret reads, and dangerous commands are denied' }}</span>
                   <button v-if="developerTaskActive" class="button danger" :disabled="developerBusy" @click="stopDeveloperAgent"><X :size="15" />{{ locale === 'ja' ? 'キャンセル' : 'Cancel' }}</button>
                   <button v-else class="button primary" :disabled="developerBusy || !selectedDeveloperWorkspace || !selectedLocalModel || !developerRequest.trim()" @click="runDeveloperAgent"><Zap :size="15" />{{ developerBusy ? copy.running : (locale === 'ja' ? '実行' : 'Run') }}</button>
+                  <button class="button secondary" :disabled="!selectedDeveloperWorkspace" @click="workspaceOpen = true" title="Open Developer Workspace">Open Workspace</button>
                 </div>
                 <p v-if="developerError" class="console-error">{{ developerError }}</p>
               </template>
             </article>
+
+            <DeveloperWorkspaceView v-if="workspaceOpen" @close="workspaceOpen = false" />
 
             <article class="panel developer-activity">
               <div class="panel-header"><div><h2>{{ locale === 'ja' ? 'エージェント活動' : 'Agent Activity' }}</h2><p>{{ locale === 'ja' ? '計画・Tool・Build/Testをリアルタイム表示' : 'Live plan, tools, build, and test activity' }}</p></div><span v-if="developerTask">{{ developerTask.steps_completed }} steps · {{ developerTask.tool_calls }} tools</span></div>
