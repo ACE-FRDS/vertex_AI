@@ -128,8 +128,9 @@ export function rollbackDeveloperTask(taskId: string) {
   return invokeDesktop<DeveloperTask>('rollback_developer_task', { taskId })
 }
 
+export interface WorkspaceEntry { name: string; relative: string; kind: 'file' | 'directory' }
 export function listWorkspaceDirectory(workspaceId: string, relative = '.') {
-  return invokeDesktop<string>('list_workspace_directory', { workspaceId, relative })
+  return invokeDesktop<WorkspaceEntry[]>('list_workspace_directory', { workspaceId, relative })
 }
 
 export function readWorkspaceFile(workspaceId: string, relative: string) {

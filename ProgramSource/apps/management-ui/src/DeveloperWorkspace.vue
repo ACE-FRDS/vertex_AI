@@ -1,14 +1,33 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, computed } from 'vue'
 import { X } from 'lucide-vue-next'
 import * as monaco from 'monaco-editor'
-import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from './services/developer'
+import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile, listDeveloperWorkspaces } from './services/developer'
 
 const emit = defineEmits(['close'])
 const props = defineProps<{ workspaceId: string }>()
 const mode = ref<'editor'|'preview'|'split'>('split')
 const editorContent = ref(`// Welcome to Vertex Developer Workspace\n\nfunction hello() {\n  console.log('Hello Vertex AI Workspace')\n}\n`)
-const entries = ref<string[]>([])
+const entries = ref<any[]>([])
+// store child entries for directories
+let childrenMap: Record<string, Array<any>> = {}
+let expandedDirs: Record<string, boolean> = {}
+
+
+const visibleNodes = computed(() => {
+  const result: Array<{entry:any, depth:number}> = []
+  function walk(list: Array<any>, depth: number) {
+    for (const entry of list) {
+      result.push({ entry, depth })
+      if (entry.kind === 'directory' && expandedDirs[entry.relative]) {
+        const children = childrenMap[entry.relative] || []
+        walk(children, depth + 1)
+      }
+    }
+  }
+  try { walk(entries.value, 0) } catch (e) {}
+  return result
+})
 const currentFileName = ref<string | null>(null)
 const dirty = ref(false)
 const saving = ref(false)
@@ -22,20 +41,37 @@ let metaMap: Record<string, { scriptLang?: string }> = {}
 const currentSubModel = ref<'template'|'script'|'style'|null>(null)
 const activeVueFile = ref<string | null>(null)
 
+// workspace info for display
+const workspaceInfo = ref<{ id: string; name: string; root: string } | null>(null)
+
 function close() {
   emit('close')
 }
 
 onMounted(async () => {
-  if (!props.workspaceId) return
+  // Load workspace info for header display
   try {
-    const list = await listWorkspaceDirectory(props.workspaceId, '.')
-    entries.value = list.split('\n')
+    const workspaces = await listDeveloperWorkspaces()
+    workspaceInfo.value = workspaces.find((w:any) => w.id === props.workspaceId) ?? null
   } catch (e) {
-    entries.value = [`Error: ${String(e)}`]
+    workspaceInfo.value = null
   }
 
-  // Initialize Monaco editor
+  if (props.workspaceId) {
+    try {
+      const list = await listWorkspaceDirectory(props.workspaceId, '.')
+        // list is WorkspaceEntry[]
+        entries.value = list
+        // Clear cached children
+        childrenMap = {}
+        expandedDirs = {}
+      } catch (e) {
+        entries.value = [`Error: ${String(e)}`]
+      }
+    } else {
+      entries.value = ['Workspace Not Selected']
+    }
+
   if (editorContainer.value) {
     editorInstance = monaco.editor.create(editorContainer.value, {
       value: editorContent.value,
@@ -65,6 +101,25 @@ onBeforeUnmount(() => {
   }
   modelMap = {}
 })
+
+async function fetchChildren(relative: string) {
+  if (childrenMap[relative]) return
+  try {
+    const list = await listWorkspaceDirectory(props.workspaceId, relative)
+    childrenMap[relative] = list
+  } catch (e) {
+    childrenMap[relative] = []
+  }
+}
+
+function toggleDir(entry:any) {
+  const obj = typeof entry === 'string' ? JSON.parse(entry) : entry
+  const rel = obj.relative
+  expandedDirs[rel] = !expandedDirs[rel]
+  if (expandedDirs[rel]) {
+    void fetchChildren(rel)
+  }
+}
 
 watch(() => editorContent.value, (v) => {
   if (editorInstance && editorInstance.getValue() !== v) {
@@ -168,7 +223,23 @@ function buildVueSFC(name: string) {
 }
 
 async function saveFile() {
-  if (!props.workspaceId || !currentFileName.value) return
+  // Validate preconditions and show clear errors instead of silent returns
+  if (!props.workspaceId) {
+    message.value = 'Workspace Not Selected'
+    return
+  }
+  if (!currentFileName.value) {
+    message.value = 'No File Open'
+    return
+  }
+
+  // Ensure file is under workspace root if known
+  if (workspaceInfo.value && !currentFileName.value.startsWith(workspaceInfo.value.root) && !currentFileName.value.startsWith('.')) {
+    // If the filename is an absolute path outside workspace, reject
+    message.value = 'File is outside the selected Workspace'
+    return
+  }
+
   saving.value = true
   message.value = null
   try {
@@ -206,21 +277,41 @@ function switchVueSubModel(kind: 'template'|'script'|'style') {
 <template>
   <section class="dev-workspace">
     <header class="dev-workspace-top">
-      <div class="top-left">Vertex Developer Workspace</div>
-      <div class="top-actions">
-        <button class="button tertiary" @click="mode = 'editor'">EDITOR</button>
-        <button class="button tertiary" @click="mode = 'preview'">PREVIEW</button>
-        <button class="button tertiary" @click="mode = 'split'">SPLIT</button>
-        <button class="icon-button" @click="close"><X :size="16" /></button>
+        <div class="top-left">
+          Vertex Developer Workspace
+          <div class="workspace-meta">
+            <span v-if="workspaceInfo">{{ workspaceInfo.name }} — <small>{{ workspaceInfo.root }}</small></span>
+            <span v-else class="muted">Workspace Not Selected</span>
+          </div>
       </div>
-    </header>
+        <div class="top-actions">
+          <span class="current-file" v-if="currentFileName">File: {{ currentFileName }}</span>
+          <button class="button primary" @click="saveFile" :disabled="saving">Save</button>
+          <button class="button tertiary" @click="mode = 'editor'">EDITOR</button>
+          <button class="button tertiary" @click="mode = 'preview'">PREVIEW</button>
+          <button class="button tertiary" @click="mode = 'split'">SPLIT</button>
+          <button class="icon-button" @click="close"><X :size="16" /></button>
+        </div>
+        <div class="top-status"><span v-if="message" :class="{ muted: message === 'Workspace Not Selected' || message === 'No File Open' || message === 'File is outside the selected Workspace' || message.startsWith('Error') }">{{ message }}</span></div>
+      </header>
 
     <div class="workspace-body">
       <aside class="explorer">
         <h4>Explorer</h4>
-        <ul>
-          <li v-for="(entry, idx) in entries" :key="idx"><button class="explorer-entry" @click="openEntry(entry)">{{ entry }}</button></li>
-        </ul>
+        <div class="explorer-list">
+          <div v-for="node in visibleNodes" :key="node.entry.relative" :style="{ paddingLeft: `${node.depth * 12}px` }" class="explorer-row" :class="{ directory: node.entry.kind === 'directory', file: node.entry.kind === 'file', selected: currentFileName === node.entry.relative }">
+            <template v-if="node.entry.kind === 'directory'">
+              <button class="explorer-toggle" @click.prevent="toggleDir(node.entry)">{{ expandedDirs[node.entry.relative] ? '▾' : '▸' }}</button>
+              <span class="icon">📁</span>
+              <button class="explorer-name" @click.prevent="toggleDir(node.entry)">{{ node.entry.name }}</button>
+            </template>
+            <template v-else>
+              <span class="spacer"></span>
+              <span class="icon">📄</span>
+              <button class="explorer-name" @click.prevent="openEntry(node.entry)">{{ node.entry.name }}</button>
+            </template>
+          </div>
+        </div>
       </aside>
 
       <main class="main-panel">
@@ -271,7 +362,7 @@ function switchVueSubModel(kind: 'template'|'script'|'style') {
 .dev-workspace-top { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .top-actions { display:flex; gap:8px; align-items:center }
 .workspace-body { display:flex; gap:12px; padding:12px; }
-.explorer { width:220px; border-right:1px solid var(--line); padding-right:12px }
+.explorer { width:260px; border-right:1px solid var(--line); padding-right:12px; overflow:auto; max-height:520px }
 .main-panel { flex:1; display:flex; gap:12px }
 .editor-pane { flex:1; display:flex; flex-direction:column }
 .editor-tabs { padding:8px 10px; border-bottom:1px solid var(--line); color:var(--muted); display:flex; align-items:center; gap:12px }
@@ -280,6 +371,14 @@ function switchVueSubModel(kind: 'template'|'script'|'style') {
 .line-numbers { font-family: 'DM Mono', monospace; color: #c9d2db; margin:0 }
 .preview-pane { width:420px; display:flex; flex-direction:column }
 .preview-frame { flex:1; border:1px solid var(--line); border-radius:6px; background:white }
+.explorer-list { display:flex; flex-direction:column }
+.explorer-row { display:flex; align-items:center; gap:8px; padding:6px 4px; white-space:nowrap; overflow:hidden }
+.explorer-row .icon { width:18px }
+.explorer-row .explorer-name { background:transparent; border:0; color:var(--muted); text-align:left; padding:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.explorer-row.selected { background: rgba(255,255,255,0.03); border-radius:4px }
+.explorer-toggle { background:transparent; border:0; width:18px }
+.explorer { font-size:13px }
+
 .inspector { width:260px; border-left:1px solid var(--line); padding-left:12px }
 .dev-terminal { display:flex; gap:12px; padding:10px 12px; border-top:1px solid var(--line); align-items:flex-start }
 .terminal-output { background: #02060a; color:#9aa8b9; padding:10px; border-radius:6px; min-width:320px; min-height:48px }

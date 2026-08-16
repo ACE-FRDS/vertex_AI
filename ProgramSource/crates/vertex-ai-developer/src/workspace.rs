@@ -1,6 +1,14 @@
 use crate::{DeveloperError, FileChange, FileChangeKind, TextReplacement, Workspace, WorkspaceId};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WorkspaceEntry {
+    pub name: String,
+    pub relative: String,
+    pub kind: String,
+}
+
 use similar::TextDiff;
 use std::{
     collections::BTreeMap,
@@ -169,16 +177,19 @@ impl FileToolkit {
         let mut entries = fs::read_dir(path)?
             .filter_map(Result::ok)
             .map(|entry| {
-                let kind = if entry.path().is_dir() {
-                    "directory"
-                } else {
-                    "file"
-                };
-                format!("{kind}\t{}", entry.file_name().to_string_lossy())
+                let is_dir = entry.path().is_dir();
+                let kind = if is_dir { "directory" } else { "file" };
+                let name = entry.file_name().to_string_lossy().to_string();
+                let rel = self.relative_display(&entry.path());
+                WorkspaceEntry {
+                    name,
+                    relative: rel,
+                    kind: kind.to_string(),
+                }
             })
             .collect::<Vec<_>>();
-        entries.sort();
-        Ok(entries.join("\n"))
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(serde_json::to_string_pretty(&entries)?)
     }
 
     pub fn read_file(&self, relative: &str) -> Result<String, DeveloperError> {
