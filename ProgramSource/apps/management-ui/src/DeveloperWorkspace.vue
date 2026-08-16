@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { X } from 'lucide-vue-next'
+import * as monaco from 'monaco-editor'
 import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from './services/developer'
 
 const emit = defineEmits(['close'])
@@ -12,6 +13,10 @@ const currentFileName = ref<string | null>(null)
 const dirty = ref(false)
 const saving = ref(false)
 const message = ref<string | null>(null)
+
+let editorInstance: monaco.editor.IStandaloneCodeEditor | null = null
+let modelMap: Record<string, monaco.editor.ITextModel> = {}
+const editorContainer = ref<HTMLElement | null>(null)
 
 function close() {
   emit('close')
@@ -25,7 +30,55 @@ onMounted(async () => {
   } catch (e) {
     entries.value = [`Error: ${String(e)}`]
   }
+
+  // Initialize Monaco editor
+  if (editorContainer.value) {
+    editorInstance = monaco.editor.create(editorContainer.value, {
+      value: editorContent.value,
+      language: determineLanguage(currentFileName.value),
+      automaticLayout: true,
+      theme: 'vs-dark',
+      minimap: { enabled: false }
+    })
+
+    editorInstance.onDidChangeModelContent(() => {
+      const val = editorInstance?.getValue() ?? ''
+      editorContent.value = val
+      dirty.value = true
+      message.value = null
+    })
+  }
 })
+
+onBeforeUnmount(() => {
+  if (editorInstance) {
+    editorInstance.dispose()
+    editorInstance = null
+  }
+  // Dispose models
+  for (const k of Object.keys(modelMap)) {
+    modelMap[k].dispose()
+  }
+  modelMap = {}
+})
+
+watch(() => editorContent.value, (v) => {
+  if (editorInstance && editorInstance.getValue() !== v) {
+    const sel = editorInstance.getSelection()
+    editorInstance.setValue(v)
+    if (sel) editorInstance.setSelection(sel)
+  }
+})
+
+function determineLanguage(fileName: string | null) {
+  if (!fileName) return 'typescript'
+  if (fileName.endsWith('.ts') || fileName.endsWith('.tsx')) return 'typescript'
+  if (fileName.endsWith('.js') || fileName.endsWith('.jsx')) return 'javascript'
+  if (fileName.endsWith('.rs')) return 'rust'
+  if (fileName.endsWith('.vue')) return 'html'
+  if (fileName.endsWith('.css')) return 'css'
+  return 'plaintext'
+}
 
 async function openEntry(line: string) {
   const parts = line.split('\t')
@@ -39,6 +92,18 @@ async function openEntry(line: string) {
       currentFileName.value = name
       dirty.value = false
       mode.value = 'editor'
+      // update monaco model
+      if (editorInstance) {
+        const lang = determineLanguage(name)
+        let model = modelMap[name]
+        if (!model) {
+          model = monaco.editor.createModel(content, lang)
+          modelMap[name] = model
+        } else {
+          model.setValue(content)
+        }
+        editorInstance.setModel(model)
+      }
     } catch (e) {
       editorContent.value = `Error: ${String(e)}`
       currentFileName.value = null
@@ -99,7 +164,7 @@ async function saveFile() {
             </div>
           </div>
           <div class="editor-area">
-            <textarea class="editor-textarea" v-model="editorContent" @input="onEditorInput"></textarea>
+            <div ref="editorContainer" class="editor-container" style="height:100%; min-height:240px"></div>
           </div>
         </div>
 
