@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { X } from 'lucide-vue-next'
-import { listWorkspaceDirectory, readWorkspaceFile } from './services/developer'
+import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile } from './services/developer'
 
 const emit = defineEmits(['close'])
 const props = defineProps<{ workspaceId: string }>()
 const mode = ref<'editor'|'preview'|'split'>('split')
 const editorContent = ref(`// Welcome to Vertex Developer Workspace\n\nfunction hello() {\n  console.log('Hello Vertex AI Workspace')\n}\n`)
 const entries = ref<string[]>([])
+const currentFileName = ref<string | null>(null)
+const dirty = ref(false)
+const saving = ref(false)
+const message = ref<string | null>(null)
 
 function close() {
   emit('close')
@@ -32,11 +36,35 @@ async function openEntry(line: string) {
     try {
       const content = await readWorkspaceFile(props.workspaceId, name)
       editorContent.value = content
+      currentFileName.value = name
+      dirty.value = false
       mode.value = 'editor'
     } catch (e) {
       editorContent.value = `Error: ${String(e)}`
+      currentFileName.value = null
       mode.value = 'editor'
     }
+  }
+}
+
+function onEditorInput() { dirty.value = true; message.value = null }
+
+async function saveFile() {
+  if (!props.workspaceId || !currentFileName.value) return
+  saving.value = true
+  message.value = null
+  try {
+    const ok = await writeWorkspaceFile(props.workspaceId, currentFileName.value, editorContent.value)
+    if (ok) {
+      dirty.value = false
+      message.value = 'Saved'
+    } else {
+      message.value = 'Save failed'
+    }
+  } catch (e) {
+    message.value = `Error: ${String(e)}`
+  } finally {
+    saving.value = false
   }
 }
 </script>
@@ -63,9 +91,15 @@ async function openEntry(line: string) {
 
       <main class="main-panel">
         <div v-if="mode === 'editor' || mode === 'split'" class="editor-pane">
-          <div class="editor-tabs">Editor - main.ts</div>
+          <div class="editor-tabs">
+            <span>{{ currentFileName ?? 'untitled' }}</span>
+            <div style="margin-left:auto; display:flex; gap:8px; align-items:center">
+              <button class="button tertiary" @click="saveFile" :disabled="!currentFileName || !dirty || saving">{{ saving ? 'Saving...' : 'Save' }}</button>
+              <span v-if="message" class="muted">{{ message }}</span>
+            </div>
+          </div>
           <div class="editor-area">
-            <pre class="line-numbers"><code v-for="(line, idx) in editorContent.split('\n')" :key="idx">{{ (idx+1)+'. ' + line }}</code></pre>
+            <textarea class="editor-textarea" v-model="editorContent" @input="onEditorInput"></textarea>
           </div>
         </div>
 
@@ -101,8 +135,9 @@ async function openEntry(line: string) {
 .explorer { width:220px; border-right:1px solid var(--line); padding-right:12px }
 .main-panel { flex:1; display:flex; gap:12px }
 .editor-pane { flex:1; display:flex; flex-direction:column }
-.editor-tabs { padding:8px 10px; border-bottom:1px solid var(--line); color:var(--muted) }
+.editor-tabs { padding:8px 10px; border-bottom:1px solid var(--line); color:var(--muted); display:flex; align-items:center; gap:12px }
 .editor-area { padding:12px; background: #041018; border-radius:6px; min-height:240px; overflow:auto }
+.editor-textarea { width:100%; height:100%; min-height:240px; background:#041018; color:#c9d2db; border:0; outline:none; padding:12px; font-family: 'DM Mono', monospace; resize:vertical }
 .line-numbers { font-family: 'DM Mono', monospace; color: #c9d2db; margin:0 }
 .preview-pane { width:420px; display:flex; flex-direction:column }
 .preview-frame { flex:1; border:1px solid var(--line); border-radius:6px; background:white }
@@ -111,4 +146,5 @@ async function openEntry(line: string) {
 .terminal-output { background: #02060a; color:#9aa8b9; padding:10px; border-radius:6px; min-width:320px; min-height:48px }
 .icon-button { background:transparent; border:0; color:var(--muted) }
 .button.tertiary { background:transparent; border:1px solid var(--line); color:var(--muted); padding:6px 9px; border-radius:6px }
+.muted { color: var(--muted); font-size: 12px }
 </style>
