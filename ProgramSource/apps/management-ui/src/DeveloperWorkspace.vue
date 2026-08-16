@@ -1,13 +1,43 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { X } from 'lucide-vue-next'
+import { listWorkspaceDirectory, readWorkspaceFile } from './services/developer'
 
 const emit = defineEmits(['close'])
+const props = defineProps<{ workspaceId: string }>()
 const mode = ref<'editor'|'preview'|'split'>('split')
 const editorContent = ref(`// Welcome to Vertex Developer Workspace\n\nfunction hello() {\n  console.log('Hello Vertex AI Workspace')\n}\n`)
+const entries = ref<string[]>([])
 
 function close() {
   emit('close')
+}
+
+onMounted(async () => {
+  if (!props.workspaceId) return
+  try {
+    const list = await listWorkspaceDirectory(props.workspaceId, '.')
+    entries.value = list.split('\n')
+  } catch (e) {
+    entries.value = [`Error: ${String(e)}`]
+  }
+})
+
+async function openEntry(line: string) {
+  const parts = line.split('\t')
+  const name = parts.pop()?.trim() ?? ''
+  if (!name) return
+  // If it's a file, read it
+  if (!line.startsWith('directory')) {
+    try {
+      const content = await readWorkspaceFile(props.workspaceId, name)
+      editorContent.value = content
+      mode.value = 'editor'
+    } catch (e) {
+      editorContent.value = `Error: ${String(e)}`
+      mode.value = 'editor'
+    }
+  }
 }
 </script>
 
@@ -27,10 +57,7 @@ function close() {
       <aside class="explorer">
         <h4>Explorer</h4>
         <ul>
-          <li><strong>src/</strong></li>
-          <li>  ├─ main.rs</li>
-          <li>  ├─ agent/</li>
-          <li>  └─ ui/</li>
+          <li v-for="(entry, idx) in entries" :key="idx"><button class="explorer-entry" @click="openEntry(entry)">{{ entry }}</button></li>
         </ul>
       </aside>
 

@@ -127,3 +127,15 @@ export function cancelDeveloperTask(taskId: string) {
 export function rollbackDeveloperTask(taskId: string) {
   return invokeDesktop<DeveloperTask>('rollback_developer_task', { taskId })
 }
+
+export function listWorkspaceDirectory(workspaceId: string, relative = '.') {
+  return invokeDesktop<string>('list_workspace_directory', { workspaceId, relative })
+}
+
+export function readWorkspaceFile(workspaceId: string, relative: string) {
+  return invokeDesktop<string>('read_workspace_file', { workspaceId, relative })
+}
+
+export function writeWorkspaceFile(workspaceId: string, relative: string, content: string) {
+  return invokeDesktop<boolean>('write_workspace_file', { workspaceId, relative, content })
+}

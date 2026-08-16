@@ -2,7 +2,7 @@ use crate::{
     AgentAction, AgentLimits, AgentTurnInput, CommandStatus, DeveloperActivity, DeveloperError,
     DeveloperMode, DeveloperStore, DeveloperTask, DeveloperTaskId, DeveloperTaskState, FileToolkit,
     PlanRevision, PlanStep, PlanStepState, RiskLevel, StartDeveloperTask, StructuredTestResult,
-    TerminalRequest, TerminalRunner, ToolCall, ToolDefinition, ToolResult, Workspace,
+    TerminalRequest, TerminalRunner, ToolCall, ToolDefinition, ToolResult, Workspace, WorkspaceId,
     WorkspaceRegistry,
 };
 use async_trait::async_trait;
@@ -600,6 +600,40 @@ impl DeveloperCoordinator {
 
     pub fn list_workspaces(&self) -> Result<Vec<Workspace>, DeveloperError> {
         self.registry.list()
+    }
+
+    /// List directory entries relative to a registered workspace root.
+    pub fn list_workspace_directory(
+        &self,
+        workspace_id: WorkspaceId,
+        relative: &str,
+    ) -> Result<String, DeveloperError> {
+        let workspace = self.registry.get(workspace_id)?;
+        let toolkit = FileToolkit::new(workspace)?;
+        toolkit.list_directory(relative)
+    }
+
+    /// Read a file relative to a registered workspace root.
+    pub fn read_workspace_file(
+        &self,
+        workspace_id: WorkspaceId,
+        relative: &str,
+    ) -> Result<String, DeveloperError> {
+        let workspace = self.registry.get(workspace_id)?;
+        let toolkit = FileToolkit::new(workspace)?;
+        toolkit.read_file(relative)
+    }
+
+    /// Write a file relative to a registered workspace root (create or overwrite).
+    pub fn write_workspace_file(
+        &self,
+        workspace_id: WorkspaceId,
+        relative: &str,
+        content: &str,
+    ) -> Result<(), DeveloperError> {
+        let workspace = self.registry.get(workspace_id)?;
+        let toolkit = FileToolkit::new(workspace)?;
+        toolkit.write_file(relative, content)
     }
 
     pub async fn start_task(

@@ -1304,7 +1304,7 @@ function connectProvider() {
               </template>
             </article>
 
-            <DeveloperWorkspaceView v-if="workspaceOpen" @close="workspaceOpen = false" />
+            <DeveloperWorkspaceView v-if="workspaceOpen" :workspace-id="selectedDeveloperWorkspace" @close="workspaceOpen = false" />
 
             <article class="panel developer-activity">
               <div class="panel-header"><div><h2>{{ locale === 'ja' ? 'エージェント活動' : 'Agent Activity' }}</h2><p>{{ locale === 'ja' ? '計画・Tool・Build/Testをリアルタイム表示' : 'Live plan, tools, build, and test activity' }}</p></div><span v-if="developerTask">{{ developerTask.steps_completed }} steps · {{ developerTask.tool_calls }} tools</span></div>

@@ -18,7 +18,7 @@ use vertex_ai_developer::{
     AgentModel, ArdAssignment, ArdCoordinator, ArdSession, ArdSessionId, ArdTeam, ArdTeamId,
     ArdWorkflow, ArdWorkflowId, CompleteArdStage, CreateArdTeam, DeveloperCoordinator,
     DeveloperError, DeveloperStore, DeveloperTask, DeveloperTaskId, JsonDeveloperEngine,
-    JsonDeveloperStore, PostgresDeveloperStore, StartDeveloperTask, Workspace, WorkspaceRegistry,
+    JsonDeveloperStore, PostgresDeveloperStore, StartDeveloperTask, Workspace, WorkspaceId, WorkspaceRegistry,
 };
 use vertex_ai_environment::{
     EnvironmentSnapshot, IndexedEnvironmentSnapshot, PersistentEnvironmentIndex,
@@ -140,6 +140,47 @@ fn list_developer_workspaces(state: State<'_, AppState>) -> Result<Vec<Workspace
         .developer
         .list_workspaces()
         .map_err(|error| developer_error("list_developer_workspaces", error))
+}
+
+#[tauri::command]
+#[allow(clippy::result_large_err)]
+fn list_workspace_directory(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+    relative: String,
+) -> Result<String, ErrorEnvelope> {
+    state
+        .developer
+        .list_workspace_directory(workspace_id, &relative)
+        .map_err(|error| developer_error("list_workspace_directory", error))
+}
+
+#[tauri::command]
+#[allow(clippy::result_large_err)]
+fn read_workspace_file(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+    relative: String,
+) -> Result<String, ErrorEnvelope> {
+    state
+        .developer
+        .read_workspace_file(workspace_id, &relative)
+        .map_err(|error| developer_error("read_workspace_file", error))
+}
+
+#[tauri::command]
+#[allow(clippy::result_large_err)]
+fn write_workspace_file(
+    state: State<'_, AppState>,
+    workspace_id: WorkspaceId,
+    relative: String,
+    content: String,
+) -> Result<bool, ErrorEnvelope> {
+    state
+        .developer
+        .write_workspace_file(workspace_id, &relative, &content)
+        .map_err(|error| developer_error("write_workspace_file", error))?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1427,6 +1468,9 @@ pub fn run() {
             store_system_memory,
             register_developer_workspace,
             list_developer_workspaces,
+            list_workspace_directory,
+            read_workspace_file,
+            write_workspace_file,
             start_developer_task,
             get_developer_task,
             list_developer_tasks,
