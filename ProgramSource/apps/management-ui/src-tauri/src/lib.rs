@@ -28,6 +28,7 @@ use vertex_ai_memory::{
     MemoryScope, MemoryWritePermit, PostgresMemoryRepository,
 };
 use vertex_ai_provider::ProviderHealth;
+use vertex_ai_provider_openai::{OpenAiProvider, OpenAiProviderConfig};
 use vertex_ai_provider_ollama::{OllamaProvider, OllamaProviderConfig};
 use vertex_ai_runtime::{
     ManagedRuntimeSnapshot, ManagedServiceRuntime, ModelDownloadCoordinator, RuntimeDiagnosis,
@@ -1351,6 +1352,7 @@ pub fn run() {
             let _ = init_logging(&config.log_filter);
             let secret_store: Arc<dyn SecretStore> =
                 Arc::new(WindowsCredentialStore::new("vertex-ai")?);
+            let secret_store_clone = secret_store.clone();
             let app_data_dir = app.path().app_data_dir()?;
             let index =
                 PersistentEnvironmentIndex::open(app_data_dir.join("environment-index-v1.json"))?;
