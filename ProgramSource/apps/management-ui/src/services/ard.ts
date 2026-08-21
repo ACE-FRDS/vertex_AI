@@ -56,11 +56,41 @@ export interface ArdSession {
   goal: string
   state: 'QUEUED' | 'RUNNING' | 'PAUSED' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
   current_stage_id: string | null
-  handoffs: Array<{ id: string; from_member_id: string; to_member_id: string | null; decision: 'accepted' | 'rework' | 'blocked'; task_result: string; next_action: string; confidence: number; created_at: string }>
+  handoffs: Array<{ id: string; from_member_id: string; to_member_id: string | null; decision: 'accepted' | 'rework' | 'blocked'; task_result: string; build_results: string[]; tests_run: string[]; test_results: string[]; next_action: string; confidence: number; created_at: string }>
   interventions: Array<{ instruction: string; created_at: string; delivered_to: string[] }>
   activity: Array<{ sequence: number; occurred_at: string; member_id: string | null; kind: string; message: string }>
-  model_rotations: Array<{ from: string | null; to: string | null; reused_loaded_model: boolean; router_required: boolean; occurred_at: string }>
+  brain_resolutions: Array<{
+    stage_id: string
+    member_id: string
+    requested: string
+    provider_id: string
+    model_id: string
+    runtime_id: string | null
+    reason: string
+    compatibility: string
+    fallback_used: boolean
+    required_capabilities: string[]
+    score: number
+    occurred_at: string
+  }>
+  model_rotations: Array<{
+    from: string | null
+    to: string | null
+    reused_loaded_model: boolean
+    router_required: boolean
+    occurred_at: string
+    current_runtime: string | null
+    next_runtime: string
+    status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'INTERRUPTED'
+    attempts: number
+    events: Array<{ kind: 'MODEL_ROTATION_STARTED' | 'MODEL_UNLOADING' | 'MODEL_LOADING' | 'MODEL_REUSED' | 'MODEL_ROTATION_COMPLETED' | 'MODEL_ROTATION_FAILED'; message: string }>
+    finished_at: string | null
+  }>
   active_model: string | null
+  active_runtime: string | null
+  active_rotation: ArdSession['model_rotations'][number] | null
+  active_execution: { stage_id: string; member_id: string; developer_task_id: string; resolved_model: string; status: 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'INTERRUPTED' | 'WAITING_APPROVAL'; started_at: string; finished_at: string | null } | null
+  executions: Array<{ stage_id: string; member_id: string; developer_task_id: string; resolved_model: string; status: string; started_at: string; finished_at: string | null }>
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -105,6 +135,10 @@ export function startArdSession(workflowId: string, goal: string) {
 
 export function listArdSessions(limit = 50) {
   return invokeDesktop<ArdSession[]>('list_ard_sessions', { limit })
+}
+
+export function getArdSession(sessionId: string) {
+  return invokeDesktop<ArdSession>('get_ard_session', { sessionId })
 }
 
 export function pauseArdSession(sessionId: string) {

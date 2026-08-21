@@ -101,6 +101,52 @@ pub enum RuntimeError {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RuntimeModelStateKind {
+    Loaded,
+    Loading,
+    Unloading,
+    Unloaded,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeModelState {
+    pub runtime_id: ProviderId,
+    pub model_id: ModelId,
+    pub state: RuntimeModelStateKind,
+    pub observed: bool,
+    pub detail: String,
+    pub observed_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeOperationControl {
+    Continue,
+    Pause,
+    Cancel,
+}
+
+/// Runtime-specific model residency control used by ARD rotation. Implementations
+/// must verify actual runtime state instead of trusting persisted ARD state.
+#[async_trait]
+pub trait ModelRuntimeAdapter: Send + Sync {
+    fn runtime_id(&self) -> &ProviderId;
+    async fn model_state(&self, model_id: &ModelId) -> Result<RuntimeModelState, RuntimeError>;
+    async fn load_model(
+        &self,
+        model_id: &ModelId,
+        control: watch::Receiver<RuntimeOperationControl>,
+    ) -> Result<RuntimeModelState, RuntimeError>;
+    async fn release_model(
+        &self,
+        model_id: &ModelId,
+        control: watch::Receiver<RuntimeOperationControl>,
+    ) -> Result<RuntimeModelState, RuntimeError>;
+}
+
 #[async_trait]
 pub trait LocalRuntimeManager: Send + Sync {
     fn id(&self) -> &ProviderId;

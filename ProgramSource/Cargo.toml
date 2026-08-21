@@ -6,6 +6,7 @@ members = [
     "crates/vertex-ai-provider-openai",
     "crates/vertex-ai-provider-ollama",
     "crates/vertex-ai-runtime",
+    "crates/vertex-ai-model-management",
     "crates/vertex-ai-runtime-postgres",
     "crates/vertex-ai-secrets",
     "crates/vertex-ai-audit",
@@ -18,7 +19,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.3"
+version = "0.1.6"
 edition = "2024"
 rust-version = "1.97.1"
 license = "Proprietary"
@@ -44,4 +45,5 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.18.0", features = ["serde", "v4"] }
 walkdir = "2.5.0"
+windows-sys = { version = "0.61.2", features = ["Win32_System_SystemInformation"] }
 zeroize = "1.8.1"

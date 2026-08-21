@@ -18,6 +18,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -27,6 +28,7 @@ vertex-ai-core = { path = "../../../crates/vertex-ai-core" }
 vertex-ai-developer = { path = "../../../crates/vertex-ai-developer" }
 vertex-ai-environment = { path = "../../../crates/vertex-ai-environment" }
 vertex-ai-memory = { path = "../../../crates/vertex-ai-memory" }
+vertex-ai-model-management = { path = "../../../crates/vertex-ai-model-management" }
 vertex-ai-provider = { path = "../../../crates/vertex-ai-provider" }
 vertex-ai-provider-ollama = { path = "../../../crates/vertex-ai-provider-ollama" }
 vertex-ai-runtime = { path = "../../../crates/vertex-ai-runtime" }

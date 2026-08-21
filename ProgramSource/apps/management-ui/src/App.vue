@@ -82,6 +82,7 @@ import {
   cancelArdSession,
   createArdTeam,
   createArdWorkflow,
+  getArdSession,
   listArdSessions,
   listArdTeams,
   listArdWorkflows,
@@ -92,6 +93,15 @@ import {
   type ArdTeam,
   type ArdWorkflow,
 } from './services/ard'
+import {
+  addModelStorageLocation,
+  chooseModelStorageDirectory,
+  getModelManagementSnapshot,
+  scanModelStorage,
+  setDefaultModelStorage,
+  type ModelManagementSnapshot,
+  type ModelRecord,
+} from './services/model-management'
 
 type Locale = 'ja' | 'en'
 type PageKey =
@@ -131,7 +141,7 @@ const messages = {
       'AI Test Console': 'プロバイダーとコンテキストの開発者向け診断', 'Developer Agent': 'リポジトリを安全に解析・編集・検証する自律型開発エージェント', Settings: 'Coreの動作と環境設定',
     },
     closeNavigation: 'ナビゲーションを閉じる', primaryNavigation: 'メインナビゲーション', openNavigation: 'ナビゲーションを開く',
-    coreOnline: 'Core オンライン', localVersion: 'v0.1.3 · ローカル', administrator: '管理者', localWorkspace: 'ローカルワークスペース',
+    coreOnline: 'Core オンライン', localVersion: 'v0.1.6 · ローカル', administrator: '管理者', localWorkspace: 'ローカルワークスペース',
     searchGlobal: 'モデル、メモリ、設定を検索…', previewData: 'プレビューデータ', notifications: '通知', localCore: 'ローカルCore',
     management: 'Vertex AI 管理コンソール', refresh: '更新', addProvider: 'プロバイダーを追加',
     thisWeek: '今週 +2', availableModels: '利用可能なモデル', connectedProviders: '2プロバイダー接続済み',
@@ -191,7 +201,7 @@ const messages = {
       'Edge Cores': 'Local autonomy and offline operation', Security: 'Secrets, permissions, and privacy boundaries', 'System Status': 'Core services, health, and performance',
       Logs: 'Operational events without private content', 'AI Test Console': 'Developer diagnostics for providers and context', 'Developer Agent': 'Autonomous repository analysis, editing, and validation within a safe workspace', Settings: 'Core behavior and environment configuration',
     },
-    closeNavigation: 'Close navigation', primaryNavigation: 'Primary navigation', openNavigation: 'Open navigation', coreOnline: 'Core online', localVersion: 'v0.1.3 · Local',
+    closeNavigation: 'Close navigation', primaryNavigation: 'Primary navigation', openNavigation: 'Open navigation', coreOnline: 'Core online', localVersion: 'v0.1.6 · Local',
     administrator: 'Administrator', localWorkspace: 'Local workspace', searchGlobal: 'Search models, memory, settings…', previewData: 'Preview data', notifications: 'Notifications',
     localCore: 'Local Core', management: 'Vertex AI Management', refresh: 'Refresh', addProvider: 'Add provider', thisWeek: '+2 this week', availableModels: 'Available models',
     connectedProviders: '2 providers connected', memoryRecords: 'Memory records', retrievalPrecision: '98.7% retrieval precision', last24h: 'Last 24h', aiOperations: 'AI operations',
@@ -295,6 +305,13 @@ const unloadingModel = ref('')
 const downloadModelName = ref('')
 const downloadJobs = ref<ModelDownloadJob[]>([])
 const downloadBusy = ref(false)
+type ModelManagementUiState =
+  | { kind: 'idle' | 'loading' | 'desktop_required' }
+  | { kind: 'ready'; snapshot: ModelManagementSnapshot }
+  | { kind: 'error'; message: string }
+const modelManagementState = ref<ModelManagementUiState>({ kind: 'idle' })
+const modelStorageBusy = ref(false)
+const modelManagerError = ref('')
 type MemoryUiState =
   | { kind: 'idle' }
   | { kind: 'loading' }
@@ -325,6 +342,7 @@ const ardTeamName = ref('Vertex Development Team')
 const ardGoal = ref('既存設計を尊重し、安全に実装・レビュー・テストしてください。')
 let downloadPollTimer: number | undefined
 let developerPollTimer: number | undefined
+let ardPollTimer: number | undefined
 
 const providers = computed(() => [
   {
@@ -338,15 +356,14 @@ const providers = computed(() => [
   { name: 'OpenAI', detail: 'Responses API', models: 0, configured: false, latency: '—', tone: 'violet' },
 ])
 
-const models = computed(() => localAiState.value.kind === 'ready'
-  ? localAiState.value.status.models.map((model) => ({
-      name: model.display_name,
-      provider: 'Ollama',
-      local: true,
-      context: model.context_size ? model.context_size.toLocaleString() : '—',
-      healthy: model.available,
-    }))
+const models = computed(() => modelManagementState.value.kind === 'ready'
+  ? modelManagementState.value.snapshot.models
   : [])
+const modelCompatibility = computed(() => new Map(
+  modelManagementState.value.kind === 'ready'
+    ? modelManagementState.value.snapshot.compatibility.map((item) => [item.model_id, item])
+    : [],
+))
 
 const routes = computed(() => locale.value === 'ja' ? [
   { time: '14:42:18', app: 'Vertex Studio', task: 'コード推論', model: 'gpt-5.6-terra', mode: '自動', latency: '1.8秒' },
@@ -435,6 +452,7 @@ watch(locale, (next) => {
 watch(activePage, (page) => {
   if (page === 'Environment Explorer' && environmentState.value.kind === 'idle') void loadEnvironment()
   if (['Dashboard', 'AI Test Console', 'Models', 'Providers'].includes(page) && localAiState.value.kind === 'idle') void loadLocalAi()
+  if (page === 'Models' && modelManagementState.value.kind === 'idle') void loadModelManagement()
   if (['Dashboard', 'AI Environment', 'Local Runtimes'].includes(page) && aiEnvironmentState.value.kind === 'idle') void loadAiEnvironment()
   if (['Dashboard', 'Models'].includes(page)) void loadDownloadJobs()
   if (['Dashboard', 'Memory', 'AI Environment', 'Local Runtimes', 'System Status'].includes(page) && memoryState.value.kind === 'idle') void loadMemoryCore()
@@ -443,6 +461,7 @@ watch(activePage, (page) => {
 onUnmounted(() => {
   window.clearTimeout(downloadPollTimer)
   window.clearTimeout(developerPollTimer)
+  window.clearTimeout(ardPollTimer)
 })
 
 function navLabel(key: PageKey) { return copy.value.nav[key] }
@@ -537,10 +556,10 @@ async function loadArdWorkflows() {
 }
 
 async function createArdPresetTeam() {
-  if (!selectedDeveloperWorkspace.value || !selectedLocalModel.value || !ardTeamName.value.trim()) return
+  if (!selectedDeveloperWorkspace.value || !ardTeamName.value.trim()) return
   developerBusy.value = true
   developerError.value = ''
-  const brain = { kind: 'model' as const, provider_id: 'ollama', model_id: selectedLocalModel.value, runtime_id: null }
+  const brain = { kind: 'auto' as const }
   try {
     const team = await createArdTeam({
       name: ardTeamName.value.trim(),
@@ -563,12 +582,19 @@ async function createArdPresetTeam() {
   }
 }
 
+function latestBrainResolution(memberId: string) {
+  return [...(ardSession.value?.brain_resolutions ?? [])]
+    .reverse()
+    .find((resolution) => resolution.member_id === memberId)
+}
+
 async function runArdRelay() {
   if (!selectedArdWorkflow.value || !ardGoal.value.trim()) return
   developerBusy.value = true
   developerError.value = ''
   try {
     ardSession.value = await startArdSession(selectedArdWorkflow.value, ardGoal.value.trim())
+    scheduleArdPoll()
   } catch (error) {
     developerError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -583,6 +609,7 @@ async function toggleArdPause() {
     ardSession.value = ardSession.value.state === 'PAUSED'
       ? await resumeArdSession(ardSession.value.id)
       : await pauseArdSession(ardSession.value.id)
+    scheduleArdPoll()
   } catch (error) {
     developerError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -595,10 +622,26 @@ async function stopArdRelay() {
   developerBusy.value = true
   try {
     ardSession.value = await cancelArdSession(ardSession.value.id)
+    window.clearTimeout(ardPollTimer)
   } catch (error) {
     developerError.value = error instanceof Error ? error.message : String(error)
   } finally {
     developerBusy.value = false
+  }
+}
+
+function scheduleArdPoll() {
+  window.clearTimeout(ardPollTimer)
+  if (!ardSession.value || !['RUNNING', 'PAUSED'].includes(ardSession.value.state)) return
+  ardPollTimer = window.setTimeout(() => void pollArdSession(ardSession.value!.id), 750)
+}
+
+async function pollArdSession(sessionId: string) {
+  try {
+    ardSession.value = await getArdSession(sessionId)
+    scheduleArdPoll()
+  } catch (error) {
+    developerError.value = error instanceof Error ? error.message : String(error)
   }
 }
 
@@ -756,6 +799,86 @@ async function loadAiEnvironment() {
       message: error instanceof Error ? error.message : String(error),
     }
   }
+}
+
+async function loadModelManagement() {
+  modelManagementState.value = { kind: 'loading' }
+  modelManagerError.value = ''
+  try {
+    const snapshot = await getModelManagementSnapshot()
+    modelManagementState.value = snapshot
+      ? { kind: 'ready', snapshot }
+      : { kind: 'desktop_required' }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    modelManagementState.value = { kind: 'error', message }
+    modelManagerError.value = message
+  }
+}
+
+async function addModelStorage() {
+  modelStorageBusy.value = true
+  modelManagerError.value = ''
+  try {
+    const path = await chooseModelStorageDirectory()
+    if (!path) return
+    const displayName = path.split(/[\\/]/).filter(Boolean).at(-1) ?? (locale.value === 'ja' ? 'モデル保存先' : 'Model Storage')
+    await addModelStorageLocation(displayName, path)
+    await loadModelManagement()
+    toast.value = locale.value === 'ja' ? 'モデル保存先を追加しました' : 'Model storage added'
+  } catch (error) {
+    modelManagerError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    modelStorageBusy.value = false
+  }
+}
+
+async function makeDefaultModelStorage(storageId: string) {
+  modelStorageBusy.value = true
+  modelManagerError.value = ''
+  try {
+    await setDefaultModelStorage(storageId)
+    await loadModelManagement()
+  } catch (error) {
+    modelManagerError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    modelStorageBusy.value = false
+  }
+}
+
+async function rescanModels() {
+  if (modelManagementState.value.kind === 'desktop_required') return
+  modelStorageBusy.value = true
+  modelManagerError.value = ''
+  try {
+    modelManagementState.value = { kind: 'ready', snapshot: await scanModelStorage() }
+  } catch (error) {
+    modelManagerError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    modelStorageBusy.value = false
+  }
+}
+
+function capabilityLabel(capability: ModelRecord['capabilities'][number]) {
+  const labels = locale.value === 'ja'
+    ? { coding: 'コーディング', reasoning: '推論', review: 'レビュー', general: '汎用', tool_use: 'ツール', structured_output: '構造化出力', long_context: '長文脈' }
+    : { coding: 'Coding', reasoning: 'Reasoning', review: 'Review', general: 'General', tool_use: 'Tool use', structured_output: 'Structured output', long_context: 'Long context' }
+  return labels[capability]
+}
+
+function compatibilityLabel(modelId: string) {
+  const state = modelCompatibility.value.get(modelId)?.state ?? 'unknown'
+  const labels = locale.value === 'ja'
+    ? { compatible: '使用可能', compatible_with_offload: 'RAM併用で使用可能', resource_constrained: 'リソース不足', unsupported: '未対応', unknown: '判定保留' }
+    : { compatible: 'Compatible', compatible_with_offload: 'Compatible with RAM', resource_constrained: 'Resource constrained', unsupported: 'Unsupported', unknown: 'Unknown' }
+  return labels[state]
+}
+
+function modelRuntimeLabel(model: ModelRecord) {
+  return model.runtime_compatibility
+    .filter((runtime) => ['available', 'compatible', 'planned'].includes(runtime.state))
+    .map((runtime) => runtime.runtime_id === 'vertex-built-in' ? 'Vertex Built-in' : runtime.runtime_id === 'ollama' ? 'Ollama' : runtime.runtime_id)
+    .join(' / ') || '—'
 }
 async function releaseModel(providerId: string, modelId: string) {
   unloadingModel.value = modelId
@@ -1076,8 +1199,50 @@ function connectProvider() {
         </template>
 
         <template v-else-if="activePage === 'Models'">
+          <section class="model-manager-hero panel">
+            <div><p class="eyebrow">Model Management Foundation</p><h2>{{ locale === 'ja' ? 'モデルマネージャー' : 'Model Manager' }}</h2><p>{{ locale === 'ja' ? 'モデル本体とRuntimeを分離し、保存場所・能力・このPCでの使用可否を一元管理します。' : 'Manage model files, runtimes, capabilities, storage, and PC compatibility independently.' }}</p></div>
+            <div class="page-actions"><button class="button secondary" :disabled="modelStorageBusy" @click="rescanModels"><RefreshCw :size="15" />{{ locale === 'ja' ? '再スキャン' : 'Rescan' }}</button><button class="button primary" :disabled="modelStorageBusy || modelManagementState.kind === 'desktop_required'" @click="addModelStorage"><Plus :size="15" />{{ locale === 'ja' ? '保存先を追加' : 'Add storage' }}</button></div>
+          </section>
+          <p v-if="modelManagementState.kind === 'desktop_required'" class="model-manager-notice"><Cpu :size="15" />{{ locale === 'ja' ? '保存先の追加と実モデル検出はデスクトップ版で利用できます。' : 'Storage selection and live discovery are available in the desktop app.' }}</p>
+          <p v-if="modelManagerError || modelManagementState.kind === 'error'" class="download-error model-manager-error"><AlertTriangle :size="14" />{{ modelManagerError || (modelManagementState.kind === 'error' ? modelManagementState.message : '') }}</p>
+
+          <section class="model-manager-summary">
+            <article class="panel"><span class="metric-icon blue"><BrainCircuit :size="18" /></span><p><span>{{ locale === 'ja' ? '登録モデル' : 'Registered models' }}</span><strong>{{ modelManagementState.kind === 'ready' ? modelManagementState.snapshot.models.length : '—' }}</strong></p></article>
+            <article class="panel"><span class="metric-icon violet"><HardDrive :size="18" /></span><p><span>{{ locale === 'ja' ? '保存先' : 'Storage locations' }}</span><strong>{{ modelManagementState.kind === 'ready' ? modelManagementState.snapshot.storage_locations.length : '—' }}</strong></p></article>
+            <article class="panel"><span class="metric-icon cyan"><MemoryStick :size="18" /></span><p><span>{{ locale === 'ja' ? '利用可能RAM' : 'Available RAM' }}</span><strong>{{ modelManagementState.kind === 'ready' && modelManagementState.snapshot.hardware.system_ram_available ? formatBytes(modelManagementState.snapshot.hardware.system_ram_available) : '—' }}</strong></p></article>
+            <article class="panel"><span class="metric-icon green"><Check :size="18" /></span><p><span>{{ locale === 'ja' ? '使用可能判定' : 'Compatible' }}</span><strong>{{ modelManagementState.kind === 'ready' ? modelManagementState.snapshot.compatibility.filter(item => ['compatible', 'compatible_with_offload'].includes(item.state)).length : '—' }}</strong></p></article>
+          </section>
+
+          <section class="model-manager-grid">
+            <article class="panel model-storage-panel">
+              <div class="panel-header"><div><h2>{{ locale === 'ja' ? '保存先' : 'Storage Locations' }}</h2><p>{{ locale === 'ja' ? '内蔵・外付けドライブを複数登録できます' : 'Register multiple internal or external drives' }}</p></div><HardDrive :size="20" /></div>
+              <div v-if="modelManagementState.kind === 'ready' && modelManagementState.snapshot.storage_locations.length" class="model-storage-list">
+                <div v-for="storage in modelManagementState.snapshot.storage_locations" :key="storage.id" class="model-storage-row">
+                  <span class="model-storage-icon"><HardDrive :size="17" /></span>
+                  <p><strong>{{ storage.display_name }}<b v-if="storage.is_default">{{ locale === 'ja' ? '既定' : 'Default' }}</b></strong><span class="mono">{{ storage.path }}</span><small>{{ locale === 'ja' ? '空き' : 'Free' }} {{ storage.free_space !== null ? formatBytes(storage.free_space) : '—' }} / {{ storage.total_space !== null ? formatBytes(storage.total_space) : '—' }}</small></p>
+                  <div><span class="status-chip" :class="storage.availability === 'available' ? 'healthy' : 'warning'">{{ storage.availability === 'available' ? (locale === 'ja' ? '利用可能' : 'Available') : (locale === 'ja' ? '未接続' : 'Unavailable') }}</span><button v-if="!storage.is_default" class="text-button inline" :disabled="modelStorageBusy" @click="makeDefaultModelStorage(storage.id)">{{ locale === 'ja' ? '既定にする' : 'Make default' }}</button></div>
+                </div>
+              </div>
+              <div v-else class="runtime-empty"><HardDrive :size="18" /><span>{{ locale === 'ja' ? '保存先はまだ登録されていません' : 'No storage locations registered' }}</span></div>
+            </article>
+
+            <article class="panel model-hardware-panel">
+              <div class="panel-header"><div><h2>{{ locale === 'ja' ? 'ハードウェア' : 'Hardware' }}</h2><p>{{ locale === 'ja' ? 'Compatibility判定に使用する実測値' : 'Observed facts used for compatibility' }}</p></div><Cpu :size="20" /></div>
+              <div class="hardware-facts">
+                <div><span>{{ locale === 'ja' ? 'システムRAM' : 'System RAM' }}</span><strong>{{ modelManagementState.kind === 'ready' && modelManagementState.snapshot.hardware.system_ram_total ? formatBytes(modelManagementState.snapshot.hardware.system_ram_total) : '—' }}</strong><small>{{ locale === 'ja' ? '利用可能' : 'Available' }} {{ modelManagementState.kind === 'ready' && modelManagementState.snapshot.hardware.system_ram_available ? formatBytes(modelManagementState.snapshot.hardware.system_ram_available) : '—' }}</small></div>
+                <div><span>{{ locale === 'ja' ? '使用中VRAM' : 'VRAM in use' }}</span><strong>{{ modelManagementState.kind === 'ready' ? formatBytes(modelManagementState.snapshot.hardware.gpu_vram_in_use) : '—' }}</strong><small>{{ locale === 'ja' ? 'Runtime実測値' : 'Runtime observation' }}</small></div>
+                <div><span>{{ locale === 'ja' ? 'GPU総VRAM' : 'Total GPU VRAM' }}</span><strong>{{ modelManagementState.kind === 'ready' && modelManagementState.snapshot.hardware.gpu_vram_total ? formatBytes(modelManagementState.snapshot.hardware.gpu_vram_total) : '—' }}</strong><small>{{ locale === 'ja' ? '未検出時はRAM基準で判定' : 'RAM fallback when unavailable' }}</small></div>
+              </div>
+            </article>
+          </section>
+
+          <section class="panel data-panel model-registry-panel">
+            <div class="panel-header"><div><h2>{{ locale === 'ja' ? 'インストール済みモデル' : 'Installed Models' }}</h2><p>{{ locale === 'ja' ? 'Local StorageとRuntime Adapterから統合したRegistry' : 'Unified Registry from local storage and runtime adapters' }}</p></div><span class="live-badge"><i></i>{{ modelManagementState.kind === 'ready' ? (locale === 'ja' ? '実データ' : 'Live') : (locale === 'ja' ? '待機中' : 'Waiting') }}</span></div>
+            <div class="table-wrap"><table><thead><tr><th>{{ locale === 'ja' ? 'モデル' : 'Model' }}</th><th>{{ locale === 'ja' ? '得意分野' : 'Capabilities' }}</th><th>Runtime</th><th>{{ locale === 'ja' ? '保存場所' : 'Storage' }}</th><th>{{ locale === 'ja' ? 'サイズ' : 'Size' }}</th><th>{{ locale === 'ja' ? 'このPC' : 'This PC' }}</th></tr></thead><tbody><tr v-for="model in models" :key="model.id"><td><span class="model-cell"><BrainCircuit :size="15" /><span><strong>{{ model.display_name }}</strong><small>{{ model.family ?? model.format ?? '—' }} · {{ model.parameter_size ?? model.quantization ?? '—' }}</small></span></span></td><td><div class="capability-tags"><span v-for="capability in model.capabilities.slice(0, 3)" :key="capability">{{ capabilityLabel(capability) }}</span></div></td><td><span class="mode-tag">{{ modelRuntimeLabel(model) }}</span></td><td class="model-path-cell" :title="model.storage_path ?? ''">{{ model.storage_path ?? '—' }}</td><td>{{ model.file_size !== null ? formatBytes(model.file_size) : '—' }}</td><td><span class="compatibility-chip" :class="modelCompatibility.get(model.id)?.state">{{ compatibilityLabel(model.id) }}</span></td></tr><tr v-if="!models.length"><td colspan="6"><div class="runtime-empty"><BrainCircuit :size="18" /><span>{{ locale === 'ja' ? '登録済みモデルはありません。保存先を追加するかOllamaを起動してください。' : 'No registered models. Add storage or start Ollama.' }}</span></div></td></tr></tbody></table></div>
+          </section>
+
           <section class="panel download-panel">
-            <div class="download-heading"><div><p class="eyebrow">Ollama</p><h2>{{ copy.downloadModel }}</h2></div></div>
+            <div class="download-heading"><div><p class="eyebrow">Runtime Adapter · Ollama</p><h2>{{ copy.downloadModel }}</h2></div></div>
             <form class="download-form" @submit.prevent="beginModelDownload">
               <label><span>{{ copy.modelName }}</span><input v-model="downloadModelName" :placeholder="copy.modelNameHint" autocomplete="off" /></label>
               <button class="button primary" :disabled="downloadBusy || !downloadModelName.trim()"><HardDrive :size="16" />{{ downloadBusy ? copy.downloading : copy.download }}</button>
@@ -1095,7 +1260,6 @@ function connectProvider() {
               <p v-else class="runtime-empty">{{ copy.noDownloadJobs }}</p>
             </div>
           </section>
-          <section class="panel data-panel"><div class="toolbar"><div class="inline-search"><Search :size="15" /><input :placeholder="copy.searchModels" /></div><button class="button tertiary"><ListFilter :size="15" />{{ copy.capabilities }}</button></div><div class="table-wrap"><table><thead><tr><th>{{ copy.model }}</th><th>{{ copy.provider }}</th><th>{{ copy.execution }}</th><th>{{ copy.context }}</th><th>{{ copy.health }}</th><th></th></tr></thead><tbody><tr v-for="model in models" :key="model.name"><td><span class="model-cell"><BrainCircuit :size="15" />{{ model.name }}</span></td><td>{{ model.provider }}</td><td><span class="mode-tag">{{ model.local ? copy.local : copy.cloud }}</span></td><td>{{ model.context }}</td><td><span :class="model.healthy ? 'complete' : 'attention-dot'"><Check v-if="model.healthy" :size="12" />{{ model.healthy ? copy.healthy : copy.degraded }}</span></td><td><button class="icon-button"><MoreHorizontal :size="17" /></button></td></tr></tbody></table></div></section>
         </template>
 
         <template v-else-if="activePage === 'AI Environment' || activePage === 'Local Runtimes'">
@@ -1259,12 +1423,12 @@ function connectProvider() {
               </div>
               <div v-if="selectedArdTeam" class="ard-members">
                 <div v-for="member in ardTeams.find((team) => team.id === selectedArdTeam)?.members ?? []" :key="member.id" class="ard-member-card">
-                  <span class="agent-orb"><Bot :size="15" /></span><div><strong>{{ member.name }}</strong><small>{{ member.role }} · {{ member.brain.kind === 'auto' ? 'Brain: Auto' : `${member.brain.provider_id}/${member.brain.model_id}` }}</small><small>{{ member.permission.allowed.join(' · ') }}</small></div>
+                  <span class="agent-orb"><Bot :size="15" /></span><div><strong>{{ member.name }}</strong><small>{{ member.role }} · {{ member.brain.kind === 'auto' ? 'Brain: Auto' : `${member.brain.provider_id}/${member.brain.model_id}` }}</small><small v-if="latestBrainResolution(member.id)" class="ard-resolution">{{ locale === 'ja' ? '解決済み' : 'Resolved' }}: {{ latestBrainResolution(member.id)?.provider_id }}/{{ latestBrainResolution(member.id)?.model_id }} · {{ latestBrainResolution(member.id)?.compatibility }} ({{ latestBrainResolution(member.id)?.score }})</small><small v-if="latestBrainResolution(member.id)" :title="latestBrainResolution(member.id)?.reason">{{ latestBrainResolution(member.id)?.reason }}</small><small>{{ member.permission.allowed.join(' · ') }}</small></div>
                 </div>
               </div>
               <div v-else class="ard-create-row">
                 <input v-model="ardTeamName" :placeholder="locale === 'ja' ? 'チーム名' : 'Team name'" />
-                <button class="button secondary" :disabled="developerBusy || !selectedDeveloperWorkspace || !selectedLocalModel" @click="createArdPresetTeam"><Plus :size="15" />{{ locale === 'ja' ? '標準3担当チームを作成' : 'Create 3-member preset' }}</button>
+                <button class="button secondary" :disabled="developerBusy || !selectedDeveloperWorkspace" @click="createArdPresetTeam"><Plus :size="15" />{{ locale === 'ja' ? 'Auto選定の標準3担当チームを作成' : 'Create Auto-routed 3-member preset' }}</button>
               </div>
               <label class="developer-task-input"><span>{{ locale === 'ja' ? 'ARDの目標' : 'ARD goal' }}</span><textarea v-model="ardGoal" :disabled="ardSession?.state === 'RUNNING'" /></label>
               <div class="developer-actions">
@@ -1275,6 +1439,11 @@ function connectProvider() {
               </div>
               <div v-if="ardSession" class="ard-activity-strip">
                 <div v-for="event in ardSession.activity.slice(-6)" :key="event.sequence"><time>{{ new Date(event.occurred_at).toLocaleTimeString(locale === 'ja' ? 'ja-JP' : 'en-US') }}</time><span>{{ event.message }}</span></div>
+              </div>
+              <div v-if="ardSession?.active_model" class="ard-runtime-status">
+                <span><strong>{{ locale === 'ja' ? '現在のモデル' : 'Current model' }}</strong>{{ ardSession.active_model }}</span>
+                <span><strong>Runtime</strong>{{ ardSession.active_runtime ?? '—' }}</span>
+                <span><strong>{{ locale === 'ja' ? 'Rotation' : 'Rotation' }}</strong>{{ ardSession.active_rotation?.status ?? ardSession.model_rotations.at(-1)?.status ?? '—' }}</span>
               </div>
             </article>
             <article class="panel developer-control">

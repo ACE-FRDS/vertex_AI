@@ -16,7 +16,10 @@ use vertex_ai_provider::{
     CostEstimate, GenerationStream, ModelProvider, ProviderCapabilities, ProviderError,
     ProviderHealth,
 };
-use vertex_ai_runtime::{LocalRuntimeManager, RuntimeError};
+use vertex_ai_runtime::{
+    LocalRuntimeManager, ModelRuntimeAdapter, RuntimeError, RuntimeModelState,
+    RuntimeModelStateKind, RuntimeOperationControl,
+};
 use vertex_ai_types::{
     GenerationRequest, GenerationResponse, HealthState, InstalledLocalModel, LoadedLocalModel,
     LocalRuntimeSnapshot, MessageRole, ModelCapabilities, ModelDescriptor, ModelDownloadProgress,
@@ -89,11 +92,6 @@ impl OllamaProvider {
         {
             return Err(ProviderError::InvalidRequest(
                 "Ollama requests require a local-only context".to_owned(),
-            ));
-        }
-        if request.parameters.structured_output_schema.is_some() {
-            return Err(ProviderError::Unsupported(
-                "structured output is not implemented by the Ollama adapter yet".to_owned(),
             ));
         }
         Ok(())
@@ -255,6 +253,7 @@ impl ModelProvider for OllamaProvider {
                     display_name: model_id.as_str().to_owned(),
                     reference: ModelRef::new(self.id.clone(), model_id),
                     capabilities: ModelCapabilities {
+                        structured_output: true,
                         streaming: false,
                         ..ModelCapabilities::default()
                     },
@@ -301,6 +300,8 @@ impl ModelProvider for OllamaProvider {
             model: request.model.model_id.as_str(),
             messages,
             stream: false,
+            think: false,
+            format: request.parameters.structured_output_schema.as_ref(),
             options: OllamaOptions {
                 temperature: request.parameters.temperature,
                 num_predict: request.parameters.max_output_tokens,
@@ -554,6 +555,161 @@ impl LocalRuntimeManager for OllamaProvider {
     }
 }
 
+#[async_trait]
+impl ModelRuntimeAdapter for OllamaProvider {
+    fn runtime_id(&self) -> &ProviderId {
+        &self.id
+    }
+
+    async fn model_state(&self, model_id: &ModelId) -> Result<RuntimeModelState, RuntimeError> {
+        let snapshot = self.inspect().await?;
+        let installed = snapshot
+            .installed_models
+            .iter()
+            .any(|model| &model.reference.model_id == model_id);
+        let loaded = snapshot
+            .loaded_models
+            .iter()
+            .any(|model| &model.reference.model_id == model_id);
+        let (state, detail) = if snapshot.health != HealthState::Ready {
+            (
+                RuntimeModelStateKind::Unavailable,
+                "Ollama runtime is unavailable".to_owned(),
+            )
+        } else if loaded {
+            (
+                RuntimeModelStateKind::Loaded,
+                "Ollama /api/ps reports the model as loaded".to_owned(),
+            )
+        } else if installed {
+            (
+                RuntimeModelStateKind::Unloaded,
+                "Model is installed but absent from Ollama /api/ps".to_owned(),
+            )
+        } else {
+            (
+                RuntimeModelStateKind::Unavailable,
+                "Model is not installed in Ollama".to_owned(),
+            )
+        };
+        Ok(RuntimeModelState {
+            runtime_id: self.id.clone(),
+            model_id: model_id.clone(),
+            state,
+            observed: true,
+            detail,
+            observed_at: Utc::now(),
+        })
+    }
+
+    async fn load_model(
+        &self,
+        model_id: &ModelId,
+        mut control: tokio::sync::watch::Receiver<RuntimeOperationControl>,
+    ) -> Result<RuntimeModelState, RuntimeError> {
+        ensure_runtime_operation_continues(*control.borrow())?;
+        let response = self
+            .client
+            .post(self.endpoint("api/generate"))
+            .timeout(self.config.request_timeout)
+            .json(&OllamaResidencyRequest {
+                model: model_id.as_str(),
+                prompt: "",
+                keep_alive: -1,
+                stream: false,
+            })
+            .send();
+        tokio::select! {
+            result = response => {
+                result
+                    .map_err(|_| RuntimeError::Unavailable("Ollama preload request failed".to_owned()))?
+                    .error_for_status()
+                    .map_err(|error| RuntimeError::Failed(format!("Ollama preload returned HTTP {}", error.status().map_or_else(|| "unknown".to_owned(), |status| status.as_u16().to_string()))))?;
+            }
+            changed = control.changed() => {
+                changed.map_err(|_| RuntimeError::Cancelled)?;
+                ensure_runtime_operation_continues(*control.borrow())?;
+            }
+        }
+        self.wait_for_model_state(model_id, RuntimeModelStateKind::Loaded, control)
+            .await
+    }
+
+    async fn release_model(
+        &self,
+        model_id: &ModelId,
+        mut control: tokio::sync::watch::Receiver<RuntimeOperationControl>,
+    ) -> Result<RuntimeModelState, RuntimeError> {
+        ensure_runtime_operation_continues(*control.borrow())?;
+        let response = self
+            .client
+            .post(self.endpoint("api/generate"))
+            .timeout(self.config.request_timeout)
+            .json(&OllamaResidencyRequest {
+                model: model_id.as_str(),
+                prompt: "",
+                keep_alive: 0,
+                stream: false,
+            })
+            .send();
+        tokio::select! {
+            result = response => {
+                result
+                    .map_err(|_| RuntimeError::Unavailable("Ollama unload request failed".to_owned()))?
+                    .error_for_status()
+                    .map_err(|error| RuntimeError::Failed(format!("Ollama unload returned HTTP {}", error.status().map_or_else(|| "unknown".to_owned(), |status| status.as_u16().to_string()))))?;
+            }
+            changed = control.changed() => {
+                changed.map_err(|_| RuntimeError::Cancelled)?;
+                ensure_runtime_operation_continues(*control.borrow())?;
+            }
+        }
+        self.wait_for_model_state(model_id, RuntimeModelStateKind::Unloaded, control)
+            .await
+    }
+}
+
+impl OllamaProvider {
+    async fn wait_for_model_state(
+        &self,
+        model_id: &ModelId,
+        expected: RuntimeModelStateKind,
+        mut control: tokio::sync::watch::Receiver<RuntimeOperationControl>,
+    ) -> Result<RuntimeModelState, RuntimeError> {
+        for _ in 0..20 {
+            ensure_runtime_operation_continues(*control.borrow())?;
+            let state = <Self as ModelRuntimeAdapter>::model_state(self, model_id).await?;
+            if state.state == expected
+                || (expected == RuntimeModelStateKind::Unloaded
+                    && state.state == RuntimeModelStateKind::Unavailable)
+            {
+                return Ok(state);
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                changed = control.changed() => {
+                    changed.map_err(|_| RuntimeError::Cancelled)?;
+                    ensure_runtime_operation_continues(*control.borrow())?;
+                }
+            }
+        }
+        Err(RuntimeError::Failed(format!(
+            "Ollama model state did not reach {expected:?}"
+        )))
+    }
+}
+
+fn ensure_runtime_operation_continues(
+    control: RuntimeOperationControl,
+) -> Result<(), RuntimeError> {
+    match control {
+        RuntimeOperationControl::Continue => Ok(()),
+        RuntimeOperationControl::Pause | RuntimeOperationControl::Cancel => {
+            Err(RuntimeError::Cancelled)
+        }
+    }
+}
+
 fn non_empty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
@@ -612,6 +768,14 @@ struct OllamaUnloadRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct OllamaResidencyRequest<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    keep_alive: i8,
+    stream: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct OllamaPullRequest<'a> {
     model: &'a str,
     stream: bool,
@@ -631,6 +795,9 @@ struct OllamaChatRequest<'a> {
     model: &'a str,
     messages: Vec<OllamaMessage<'a>>,
     stream: bool,
+    think: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a Value>,
     options: OllamaOptions,
 }
 
@@ -724,7 +891,7 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/api/chat")
-                .json_body_includes(r#"{"model":"qwen3:8b","stream":false}"#);
+                .json_body_includes(r#"{"model":"qwen3:8b","stream":false,"think":false}"#);
             then.status(200).json_body(json!({
                 "message": {"role": "assistant", "content": "応答"},
                 "done_reason": "stop",
@@ -814,6 +981,54 @@ mod tests {
         assert_eq!(updates[0].completed_bytes, 50);
         assert_eq!(updates[0].total_bytes, Some(100));
         assert_eq!(updates[1].status, "success");
+    }
+
+    #[tokio::test]
+    async fn runtime_adapter_preloads_and_observes_loaded_model() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/api/version");
+            then.status(200).json_body(json!({"version": "0.32.9"}));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/api/tags");
+            then.status(200).json_body(json!({"models": [{
+                "name": "qwen3:8b", "size": 123, "digest": "sha256:abc"
+            }]}));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/api/ps");
+            then.status(200).json_body(json!({"models": [{
+                "name": "qwen3:8b", "size": 123, "size_vram": 100,
+                "context_length": 32768
+            }]}));
+        });
+        let preload = server.mock(|when, then| {
+            when.method(POST).path("/api/generate").json_body_includes(
+                r#"{"model":"qwen3:8b","prompt":"","keep_alive":-1,"stream":false}"#,
+            );
+            then.status(200).json_body(json!({"done": true}));
+        });
+        let (_control_tx, control_rx) =
+            tokio::sync::watch::channel(RuntimeOperationControl::Continue);
+        let state = provider(&server)
+            .load_model(&ModelId::new("qwen3:8b").unwrap(), control_rx)
+            .await
+            .expect("loaded state");
+        preload.assert();
+        assert_eq!(state.state, RuntimeModelStateKind::Loaded);
+        assert!(state.observed);
+    }
+
+    #[tokio::test]
+    async fn runtime_adapter_honors_cancel_before_network_operation() {
+        let server = MockServer::start();
+        let (_control_tx, control_rx) =
+            tokio::sync::watch::channel(RuntimeOperationControl::Cancel);
+        let result = provider(&server)
+            .load_model(&ModelId::new("qwen3:8b").unwrap(), control_rx)
+            .await;
+        assert!(matches!(result, Err(RuntimeError::Cancelled)));
     }
 
     #[test]

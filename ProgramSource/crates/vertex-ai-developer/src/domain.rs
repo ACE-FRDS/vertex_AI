@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::HardPermission;
+
 pub type WorkspaceId = Uuid;
 pub type DeveloperTaskId = Uuid;
 pub type CommandExecutionId = Uuid;
@@ -212,12 +214,18 @@ pub struct DeveloperTask {
     pub request: String,
     pub mode: DeveloperMode,
     pub model: String,
+    #[serde(default)]
+    pub soft_policy: Option<String>,
+    #[serde(default)]
+    pub hard_permission: Option<HardPermission>,
     pub state: DeveloperTaskState,
     pub risk: RiskLevel,
     pub confidence: f32,
     pub confidence_reason: String,
     pub plan_revisions: Vec<PlanRevision>,
     pub activities: Vec<DeveloperActivity>,
+    #[serde(default)]
+    pub files_read: Vec<String>,
     pub files_changed: Vec<FileChange>,
     pub commands: Vec<CommandExecution>,
     pub errors: Vec<DeveloperErrorEvent>,
@@ -246,12 +254,15 @@ impl DeveloperTask {
             request: request.into(),
             mode,
             model: model.into(),
+            soft_policy: None,
+            hard_permission: None,
             state: DeveloperTaskState::Queued,
             risk: RiskLevel::Low,
             confidence: 0.0,
             confidence_reason: "not evaluated".to_owned(),
             plan_revisions: Vec::new(),
             activities: Vec::new(),
+            files_read: Vec::new(),
             files_changed: Vec::new(),
             commands: Vec::new(),
             errors: Vec::new(),
@@ -444,6 +455,7 @@ pub struct AgentTurnInput {
     pub workspace: Workspace,
     pub recent_observations: Vec<ToolResult>,
     pub available_tools: Vec<ToolDefinition>,
+    pub runtime_directive: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,5 +465,9 @@ pub struct StartDeveloperTask {
     pub mode: DeveloperMode,
     pub provider_id: String,
     pub model_id: String,
+    #[serde(default)]
+    pub soft_policy: Option<String>,
+    #[serde(default)]
+    pub hard_permission: Option<HardPermission>,
     pub limits: Option<AgentLimits>,
 }

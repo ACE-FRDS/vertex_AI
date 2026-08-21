@@ -2520,6 +2520,7 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
 ]
@@ -3219,6 +3220,30 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams 0.5.0",
  "web-sys",
+]
+
+[[package]]
+name = "rfd"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "glib-sys",
+ "gobject-sys",
+ "gtk-sys",
+ "js-sys",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4286,6 +4311,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin"
+version = "2.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74be5dd4bed9afbd145e5716b5fa2ec28cbc29c34ffa61c258c9273d896c8020"
+dependencies = [
+ "anyhow",
+ "glob",
+ "plist",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tauri-utils",
+ "walkdir",
+]
+
+[[package]]
+name = "tauri-plugin-dialog"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2d3c1dbe38037e7f590cdf2492594d5ceebe031e7bc7e827509b22a999d2940"
+dependencies = [
+ "log",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "tauri-plugin-fs",
+ "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
+name = "tauri-plugin-fs"
+version = "2.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ecc274121aca0c036a2b42d1cbe83d368d348f54e0bb8a735c2b1548e8f371"
+dependencies = [
+ "anyhow",
+ "dunce",
+ "glob",
+ "log",
+ "objc2-foundation",
+ "percent-encoding",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "tauri",
+ "tauri-plugin",
+ "tauri-utils",
+ "thiserror 2.0.20",
+ "toml 1.1.4+spec-1.1.0",
+ "url",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4995,7 +5078,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertex-ai-audit"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "serde_json",
@@ -5006,7 +5089,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-context"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -5019,7 +5102,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-core"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5041,7 +5124,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-desktop"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5049,6 +5132,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-plugin-dialog",
  "tempfile",
  "tokio",
  "tracing",
@@ -5059,6 +5143,7 @@ dependencies = [
  "vertex-ai-developer",
  "vertex-ai-environment",
  "vertex-ai-memory",
+ "vertex-ai-model-management",
  "vertex-ai-provider",
  "vertex-ai-provider-ollama",
  "vertex-ai-runtime",
@@ -5069,7 +5154,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-developer"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5088,7 +5173,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-environment"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "serde",
@@ -5100,7 +5185,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-memory"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5113,8 +5198,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "vertex-ai-model-management"
+version = "0.1.6"
+dependencies = [
+ "chrono",
+ "fs2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
+ "vertex-ai-types",
+ "walkdir",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "vertex-ai-provider"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5129,7 +5230,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-provider-ollama"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5148,7 +5249,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-provider-openai"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5165,7 +5266,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-runtime"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5179,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-runtime-postgres"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5198,7 +5299,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-secrets"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "keyring",
@@ -5211,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "vertex-ai-types"
-version = "0.1.3"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "serde",

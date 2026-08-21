@@ -1,4 +1,7 @@
-use crate::{DeveloperError, RiskLevel, ToolCall, WorkspaceId};
+use crate::{
+    BrainResolution, DeveloperError, DeveloperTaskId, ModelRotationEvent, ModelRotationPlan,
+    RiskLevel, ToolCall, WorkspaceId,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -25,19 +28,6 @@ pub enum BrainAssignment {
         model_id: String,
         runtime_id: Option<String>,
     },
-}
-
-impl BrainAssignment {
-    fn label(&self) -> Option<String> {
-        match self {
-            Self::Auto => None,
-            Self::Model {
-                provider_id,
-                model_id,
-                ..
-            } => Some(format!("{provider_id}/{model_id}")),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -222,6 +212,8 @@ pub struct StructuredHandoff {
     pub decisions: Vec<String>,
     pub files_read: Vec<String>,
     pub files_changed: Vec<String>,
+    #[serde(default)]
+    pub build_results: Vec<String>,
     pub tests_run: Vec<String>,
     pub test_results: Vec<String>,
     pub known_issues: Vec<String>,
@@ -238,6 +230,8 @@ pub struct CompleteArdStage {
     pub decisions: Vec<String>,
     pub files_read: Vec<String>,
     pub files_changed: Vec<String>,
+    #[serde(default)]
+    pub build_results: Vec<String>,
     pub tests_run: Vec<String>,
     pub test_results: Vec<String>,
     pub known_issues: Vec<String>,
@@ -281,6 +275,66 @@ pub struct ModelRotationRecord {
     pub reused_loaded_model: bool,
     pub router_required: bool,
     pub occurred_at: DateTime<Utc>,
+    #[serde(default)]
+    pub current_runtime: Option<String>,
+    #[serde(default)]
+    pub next_runtime: String,
+    #[serde(default)]
+    pub status: ModelRotationStatus,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default)]
+    pub events: Vec<ModelRotationEvent>,
+    #[serde(default)]
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ModelRotationStatus {
+    Running,
+    Completed,
+    Failed,
+    #[default]
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrainResolutionRecord {
+    pub stage_id: ArdStageId,
+    pub member_id: ArdMemberId,
+    pub requested: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub runtime_id: Option<String>,
+    pub reason: String,
+    pub compatibility: String,
+    pub fallback_used: bool,
+    pub required_capabilities: Vec<String>,
+    pub score: u32,
+    pub occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ArdExecutionStatus {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+    WaitingApproval,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArdStageExecution {
+    pub stage_id: ArdStageId,
+    pub member_id: ArdMemberId,
+    pub developer_task_id: DeveloperTaskId,
+    pub resolved_model: String,
+    pub status: ArdExecutionStatus,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -297,7 +351,17 @@ pub struct ArdSession {
     pub interventions: Vec<ArdIntervention>,
     pub activity: Vec<ArdActivity>,
     pub model_rotations: Vec<ModelRotationRecord>,
+    #[serde(default)]
+    pub brain_resolutions: Vec<BrainResolutionRecord>,
     pub active_model: Option<String>,
+    #[serde(default)]
+    pub active_runtime: Option<String>,
+    #[serde(default)]
+    pub active_rotation: Option<ModelRotationRecord>,
+    #[serde(default)]
+    pub active_execution: Option<ArdStageExecution>,
+    #[serde(default)]
+    pub executions: Vec<ArdStageExecution>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -337,6 +401,20 @@ impl ArdCoordinator {
         for session in document.sessions.values_mut() {
             if session.state == ArdSessionState::Running {
                 session.state = ArdSessionState::Paused;
+                if let Some(mut execution) = session.active_execution.take() {
+                    execution.status = ArdExecutionStatus::Interrupted;
+                    execution.finished_at = Some(Utc::now());
+                    session.executions.push(execution);
+                }
+                if let Some(mut rotation) = session.active_rotation.take() {
+                    rotation.status = ModelRotationStatus::Interrupted;
+                    rotation.finished_at = Some(Utc::now());
+                    rotation.events.push(ModelRotationEvent {
+                        kind: crate::ModelRotationEventKind::ModelRotationFailed,
+                        message: "アプリ終了によりモデル切替が中断されました".to_owned(),
+                    });
+                    session.model_rotations.push(rotation);
+                }
                 push_activity(
                     session,
                     None,
@@ -515,7 +593,12 @@ impl ArdCoordinator {
             interventions: Vec::new(),
             activity: Vec::new(),
             model_rotations: Vec::new(),
+            brain_resolutions: Vec::new(),
             active_model: None,
+            active_runtime: None,
+            active_rotation: None,
+            active_execution: None,
+            executions: Vec::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             completed_at: None,
@@ -526,7 +609,6 @@ impl ArdCoordinator {
             "session_started",
             "ARD Relayを開始しました",
         );
-        rotate_for_current(&mut session, &workflow, &team)?;
         self.update(|document| {
             document.sessions.insert(session.id, session.clone());
         })?;
@@ -643,11 +725,6 @@ impl ArdCoordinator {
                 .get(&session.workflow_id)
                 .cloned()
                 .ok_or_else(|| DeveloperError::NotFound("ARD workflow".to_owned()))?;
-            let team = document
-                .teams
-                .get(&session.team_id)
-                .cloned()
-                .ok_or_else(|| DeveloperError::NotFound("ARD team".to_owned()))?;
             let current_id = session
                 .current_stage_id
                 .ok_or_else(|| DeveloperError::Invalid("missing current stage".to_owned()))?;
@@ -674,6 +751,7 @@ impl ArdCoordinator {
                 decisions: input.decisions,
                 files_read: input.files_read,
                 files_changed: input.files_changed,
+                build_results: input.build_results,
                 tests_run: input.tests_run,
                 test_results: input.test_results,
                 known_issues: input.known_issues,
@@ -744,7 +822,6 @@ impl ArdCoordinator {
                             "stage_started",
                             "次の担当者へRelayしました",
                         );
-                        rotate_for_current(&mut session, &workflow, &team)?;
                     }
                 }
             }
@@ -752,6 +829,268 @@ impl ArdCoordinator {
             let result = session.clone();
             document.sessions.insert(id, session);
             Ok(result)
+        })
+    }
+
+    pub fn begin_stage_execution(
+        &self,
+        id: ArdSessionId,
+        stage_id: ArdStageId,
+        member_id: ArdMemberId,
+        developer_task_id: DeveloperTaskId,
+        resolved_model: impl Into<String>,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            if session.state != ArdSessionState::Running {
+                return Err(DeveloperError::Invalid(
+                    "ARD session is not running".to_owned(),
+                ));
+            }
+            if session.current_stage_id != Some(stage_id) || session.active_execution.is_some() {
+                return Err(DeveloperError::Invalid(
+                    "ARD stage execution does not match the current stage".to_owned(),
+                ));
+            }
+            session.active_execution = Some(ArdStageExecution {
+                stage_id,
+                member_id,
+                developer_task_id,
+                resolved_model: resolved_model.into(),
+                status: ArdExecutionStatus::Running,
+                started_at: Utc::now(),
+                finished_at: None,
+            });
+            push_activity(
+                session,
+                Some(member_id),
+                "agent_task_started",
+                "Developer Agent Taskを自動起動しました",
+            );
+            Ok(session.clone())
+        })
+    }
+
+    pub fn finish_stage_execution(
+        &self,
+        id: ArdSessionId,
+        developer_task_id: DeveloperTaskId,
+        status: ArdExecutionStatus,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            let mut execution = session
+                .active_execution
+                .take()
+                .ok_or_else(|| DeveloperError::NotFound("active ARD stage execution".to_owned()))?;
+            if execution.developer_task_id != developer_task_id {
+                session.active_execution = Some(execution);
+                return Err(DeveloperError::Invalid(
+                    "Developer Task does not own the active ARD execution".to_owned(),
+                ));
+            }
+            execution.status = status;
+            execution.finished_at = Some(Utc::now());
+            let member_id = execution.member_id;
+            session.executions.push(execution);
+            push_activity(
+                session,
+                Some(member_id),
+                "agent_task_finished",
+                "Developer Agent Taskの結果をARDへ返しました",
+            );
+            Ok(session.clone())
+        })
+    }
+
+    pub fn append_activity(
+        &self,
+        id: ArdSessionId,
+        member_id: Option<ArdMemberId>,
+        kind: &str,
+        message: &str,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            push_activity(session, member_id, kind, message);
+            Ok(session.clone())
+        })
+    }
+
+    pub fn record_brain_resolution(
+        &self,
+        id: ArdSessionId,
+        assignment: &ArdAssignment,
+        resolution: &BrainResolution,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            session.brain_resolutions.push(BrainResolutionRecord {
+                stage_id: assignment.stage.id,
+                member_id: assignment.member.id,
+                requested: resolution.requested.clone(),
+                provider_id: resolution.resolved_brain.provider_id.clone(),
+                model_id: resolution.resolved_brain.model_id.clone(),
+                runtime_id: resolution.resolved_brain.runtime_id.clone(),
+                reason: resolution.reason.clone(),
+                compatibility: resolution.compatibility.clone(),
+                fallback_used: resolution.fallback_used,
+                required_capabilities: resolution.required_capabilities.clone(),
+                score: resolution.score,
+                occurred_at: Utc::now(),
+            });
+            push_activity(
+                session,
+                Some(assignment.member.id),
+                "brain_resolved",
+                &format!(
+                    "Brain {} → {} ({})",
+                    resolution.requested,
+                    resolution.resolved_brain.label(),
+                    resolution.reason
+                ),
+            );
+            Ok(session.clone())
+        })
+    }
+
+    pub fn begin_model_rotation(
+        &self,
+        id: ArdSessionId,
+        member_id: ArdMemberId,
+        plan: &ModelRotationPlan,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            if session.active_rotation.is_some() {
+                return Err(DeveloperError::Invalid(
+                    "a model rotation is already active".to_owned(),
+                ));
+            }
+            session.active_rotation = Some(ModelRotationRecord {
+                from: plan.current_model.clone(),
+                to: Some(plan.next_model.clone()),
+                reused_loaded_model: false,
+                router_required: true,
+                occurred_at: Utc::now(),
+                current_runtime: plan.current_runtime.clone(),
+                next_runtime: plan.next_runtime.clone(),
+                status: ModelRotationStatus::Running,
+                attempts: 0,
+                events: vec![ModelRotationEvent {
+                    kind: crate::ModelRotationEventKind::ModelRotationStarted,
+                    message: if plan.rotation_required {
+                        format!(
+                            "Model rotation {} → {}",
+                            plan.current_model.as_deref().unwrap_or("none"),
+                            plan.next_model
+                        )
+                    } else {
+                        format!("Model reuseを確認します: {}", plan.next_model)
+                    },
+                }],
+                finished_at: None,
+            });
+            push_activity(
+                session,
+                Some(member_id),
+                "model_rotation_started",
+                if plan.rotation_required {
+                    "次の担当者のためモデル切替を開始しました"
+                } else {
+                    "同一モデルを再利用できるか実Runtimeを確認します"
+                },
+            );
+            Ok(session.clone())
+        })
+    }
+
+    pub fn append_model_rotation_event(
+        &self,
+        id: ArdSessionId,
+        member_id: ArdMemberId,
+        event: ModelRotationEvent,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            let kind = match event.kind {
+                crate::ModelRotationEventKind::ModelRotationStarted => "model_rotation_started",
+                crate::ModelRotationEventKind::ModelUnloading => "model_unloading",
+                crate::ModelRotationEventKind::ModelLoading => "model_loading",
+                crate::ModelRotationEventKind::ModelReused => "model_reused",
+                crate::ModelRotationEventKind::ModelRotationCompleted => "model_rotation_completed",
+                crate::ModelRotationEventKind::ModelRotationFailed => "model_rotation_failed",
+            };
+            let rotation = session
+                .active_rotation
+                .as_mut()
+                .ok_or_else(|| DeveloperError::NotFound("active model rotation".to_owned()))?;
+            rotation.events.push(event.clone());
+            push_activity(session, Some(member_id), kind, &event.message);
+            Ok(session.clone())
+        })
+    }
+
+    pub fn finish_model_rotation(
+        &self,
+        id: ArdSessionId,
+        member_id: ArdMemberId,
+        success: bool,
+        attempts: u32,
+        reused: bool,
+        detail: &str,
+    ) -> Result<ArdSession, DeveloperError> {
+        self.update_result(|document| {
+            let session = document
+                .sessions
+                .get_mut(&id)
+                .ok_or_else(|| DeveloperError::NotFound(format!("ARD session {id}")))?;
+            let mut rotation = session
+                .active_rotation
+                .take()
+                .ok_or_else(|| DeveloperError::NotFound("active model rotation".to_owned()))?;
+            rotation.status = if success {
+                ModelRotationStatus::Completed
+            } else {
+                ModelRotationStatus::Failed
+            };
+            rotation.attempts = attempts;
+            rotation.reused_loaded_model = reused;
+            rotation.finished_at = Some(Utc::now());
+            if success {
+                session.active_model = rotation.to.clone();
+                session.active_runtime = Some(rotation.next_runtime.clone());
+            }
+            session.model_rotations.push(rotation);
+            push_activity(
+                session,
+                Some(member_id),
+                if success {
+                    "model_rotation_ready"
+                } else {
+                    "model_rotation_failed"
+                },
+                detail,
+            );
+            Ok(session.clone())
         })
     }
 
@@ -872,39 +1211,6 @@ impl ArdCoordinator {
     }
 }
 
-fn rotate_for_current(
-    session: &mut ArdSession,
-    workflow: &ArdWorkflow,
-    team: &ArdTeam,
-) -> Result<(), DeveloperError> {
-    let stage_id = session
-        .current_stage_id
-        .ok_or_else(|| DeveloperError::Invalid("missing current stage".to_owned()))?;
-    let stage = workflow
-        .stages
-        .iter()
-        .find(|stage| stage.id == stage_id)
-        .ok_or_else(|| DeveloperError::NotFound("ARD stage".to_owned()))?;
-    let member = team
-        .members
-        .iter()
-        .find(|member| member.id == stage.member_id)
-        .ok_or_else(|| DeveloperError::NotFound("ARD member".to_owned()))?;
-    let next = member.brain.label();
-    let reused = next.is_some() && next == session.active_model;
-    session.model_rotations.push(ModelRotationRecord {
-        from: session.active_model.clone(),
-        to: next.clone(),
-        reused_loaded_model: reused,
-        router_required: matches!(member.brain, BrainAssignment::Auto),
-        occurred_at: Utc::now(),
-    });
-    if next.is_some() {
-        session.active_model = next;
-    }
-    Ok(())
-}
-
 fn push_activity(
     session: &mut ArdSession,
     member_id: Option<ArdMemberId>,
@@ -1003,6 +1309,7 @@ mod tests {
             decisions: vec!["reuse core".to_owned()],
             files_read: vec!["src/lib.rs".to_owned()],
             files_changed: Vec::new(),
+            build_results: Vec::new(),
             tests_run: vec!["cargo test".to_owned()],
             test_results: vec!["pass".to_owned()],
             known_issues: Vec::new(),
@@ -1112,9 +1419,73 @@ mod tests {
             .intervene(session.id, "HashMapをRuntimeで使わないで")
             .unwrap();
         assert_eq!(intervened.interventions.len(), 1);
-        let relayed = coordinator
-            .complete_stage(session.id, result(HandoffDecision::Accepted))
+        let member_id = coordinator
+            .current_assignment(session.id)
+            .unwrap()
+            .member
+            .id;
+        coordinator
+            .begin_model_rotation(
+                session.id,
+                member_id,
+                &ModelRotationPlan {
+                    current_model: Some("ollama/qwen3:8b".to_owned()),
+                    next_model: "ollama/qwen3:8b".to_owned(),
+                    current_runtime: Some("ollama".to_owned()),
+                    next_runtime: "ollama".to_owned(),
+                    reuse_possible: true,
+                    rotation_required: false,
+                    resource_policy: crate::ResourcePolicy::Balanced,
+                },
+            )
             .unwrap();
-        assert!(relayed.model_rotations.last().unwrap().reused_loaded_model);
+        let rotated = coordinator
+            .finish_model_rotation(session.id, member_id, true, 1, true, "loaded model reused")
+            .unwrap();
+        assert!(rotated.model_rotations.last().unwrap().reused_loaded_model);
+    }
+
+    #[test]
+    fn interrupted_rotation_is_persisted_and_recovered_as_paused() {
+        let (coordinator, _, workflow) = setup();
+        let path = coordinator.path.clone();
+        let session = coordinator.start_session(workflow.id, "Recovery").unwrap();
+        let member_id = coordinator
+            .current_assignment(session.id)
+            .unwrap()
+            .member
+            .id;
+        coordinator
+            .begin_model_rotation(
+                session.id,
+                member_id,
+                &ModelRotationPlan {
+                    current_model: Some("ollama/qwen3:4b".to_owned()),
+                    next_model: "ollama/qwen3:8b".to_owned(),
+                    current_runtime: Some("ollama".to_owned()),
+                    next_runtime: "ollama".to_owned(),
+                    reuse_possible: false,
+                    rotation_required: true,
+                    resource_policy: crate::ResourcePolicy::Balanced,
+                },
+            )
+            .unwrap();
+        drop(coordinator);
+
+        let recovered = ArdCoordinator::open(path).unwrap();
+        let session = recovered.get_session(session.id).unwrap();
+        assert_eq!(session.state, ArdSessionState::Paused);
+        assert!(session.active_rotation.is_none());
+        assert_eq!(session.model_rotations.len(), 1);
+        assert_eq!(
+            session.model_rotations[0].status,
+            ModelRotationStatus::Interrupted
+        );
+        assert!(
+            session
+                .activity
+                .iter()
+                .any(|event| event.kind == "recovery")
+        );
     }
 }
